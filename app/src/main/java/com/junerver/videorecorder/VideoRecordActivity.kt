@@ -12,6 +12,7 @@ import android.os.Bundle
 import android.os.Environment
 import android.os.Handler
 import android.support.v7.app.AppCompatActivity
+import android.util.Log
 import android.view.MotionEvent
 import android.view.SurfaceHolder
 import android.view.View
@@ -149,9 +150,13 @@ class VideoRecordActivity : AppCompatActivity() {
             mRecorder?.setVideoSource(MediaRecorder.VideoSource.CAMERA)
             // Set output file format
             mRecorder?.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
-            // 这两项需要放在setOutputFormat之后
+            // 这两项需要放在setOutputFormat之后 IOS必须使用ACC
             mRecorder?.setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
-            mRecorder?.setVideoEncoder(MediaRecorder.VideoEncoder.MPEG_4_SP)
+            //使用MPEG_4_SP格式在华为P20 pro上停止录制时会出现
+            //MediaRecorder: stop failed: -1007
+            //java.lang.RuntimeException: stop failed.
+            // at android.media.MediaRecorder.stop(Native Method)
+            mRecorder?.setVideoEncoder(MediaRecorder.VideoEncoder.H264)
 
             mRecorder?.setVideoSize(640, 480)
             mRecorder?.setVideoFrameRate(30)
@@ -178,7 +183,7 @@ class VideoRecordActivity : AppCompatActivity() {
     private fun stopRecord() {
         if (mStartedFlag) {
             mStartedFlag = false
-            mLlRecordOp.visibility = View.VISIBLE
+
             mBtnPlay.visibility = View.VISIBLE
             mLlRecordBtn.visibility = View.INVISIBLE
 
@@ -191,7 +196,9 @@ class VideoRecordActivity : AppCompatActivity() {
             mCamera?.release()
             mCamera=null
             MediaUtils.getImageForVideo(path) {
+                //获取到第一帧图片后再显示操作按钮
                 imgPath=it.absolutePath
+                mLlRecordOp.visibility = View.VISIBLE
             }
         }
     }
