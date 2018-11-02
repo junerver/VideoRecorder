@@ -150,7 +150,7 @@ class VideoRecordActivity : AppCompatActivity() {
             // Set output file format
             mRecorder?.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
             // 这两项需要放在setOutputFormat之后
-            mRecorder?.setAudioEncoder(MediaRecorder.AudioEncoder.AMR_NB)
+            mRecorder?.setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
             mRecorder?.setVideoEncoder(MediaRecorder.VideoEncoder.MPEG_4_SP)
 
             mRecorder?.setVideoSize(640, 480)
