@@ -1,0 +1,95 @@
+<?xml version="1.0" encoding="utf-8"?>
+<android.support.constraint.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#000000">
+
+
+    <SurfaceView
+        android:id="@+id/mSurfaceview"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent" />
+
+    <Button
+        android:id="@+id/mBtnPlay"
+        android:layout_width="70dp"
+        android:layout_height="70dp"
+        android:visibility="invisible"
+        android:layout_marginBottom="8dp"
+        android:layout_marginEnd="8dp"
+        android:layout_marginLeft="8dp"
+        android:layout_marginRight="8dp"
+        android:layout_marginStart="8dp"
+        android:layout_marginTop="8dp"
+        android:background="@drawable/btn_record_play"
+        app:layout_constraintBottom_toBottomOf="@+id/mSurfaceview"
+        app:layout_constraintEnd_toEndOf="@+id/mSurfaceview"
+        app:layout_constraintStart_toStartOf="@+id/mSurfaceview"
+        app:layout_constraintTop_toTopOf="@+id/mSurfaceview" />
+
+    <LinearLayout
+        android:id="@+id/mLlRecordBtn"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:gravity="center_horizontal"
+        android:orientation="vertical"
+        android:layout_marginBottom="80dp"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent">
+
+        <TextView
+            android:id="@+id/mTvRecordTip"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="20dp"
+            android:text="按住拍摄"
+            android:textColor="#ffffffff"
+            android:textSize="16sp" />
+
+        <Button
+            android:id="@+id/mBtnRecord"
+            android:layout_width="80dp"
+            android:layout_height="80dp"
+            android:layout_marginEnd="8dp"
+            android:layout_marginLeft="8dp"
+            android:layout_marginRight="8dp"
+            android:layout_marginStart="8dp"
+            android:background="@drawable/btn_video_record" />
+    </LinearLayout>
+
+
+    <LinearLayout
+        android:id="@+id/mLlRecordOp"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:visibility="invisible"
+        android:gravity="center"
+        android:orientation="horizontal"
+        android:layout_marginBottom="80dp"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent">
+
+        <Button
+            android:id="@+id/mBtnCancle"
+            android:layout_width="70dp"
+            android:layout_height="70dp"
+            android:layout_marginRight="60dp"
+            android:background="@drawable/btn_record_cancle"/>
+
+        <Button
+            android:id="@+id/mBtnSubmit"
+            android:layout_width="70dp"
+            android:layout_height="70dp"
+            android:layout_marginLeft="60dp"
+            android:background="@drawable/btn_record_sumbit"/>
+
+
+    </LinearLayout>
+
+
+
+</android.support.constraint.ConstraintLayout>
