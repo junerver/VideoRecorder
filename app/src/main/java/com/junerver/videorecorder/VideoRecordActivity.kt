@@ -31,6 +31,8 @@ class VideoRecordActivity : AppCompatActivity() {
     private var timer = 0 //计时器
     private val maxSec = 10
     private lateinit var imgPath:String
+    private var startTime:Long = 0L
+    private var stopTime:Long = 0L
 
 
     //用于记录视频录制时长
@@ -104,6 +106,10 @@ class VideoRecordActivity : AppCompatActivity() {
         }
         mBtnCancle.setOnClickListener {
             stopPlay()
+            var videoFile = File(path)
+            if (videoFile.exists() && videoFile.isFile) {
+                videoFile.delete()
+            }
             setResult(Activity.RESULT_CANCELED)
             finish()
         }
@@ -175,6 +181,7 @@ class VideoRecordActivity : AppCompatActivity() {
                 mRecorder?.setOutputFile(path)
                 mRecorder?.prepare()
                 mRecorder?.start()
+                startTime = System.currentTimeMillis()
             }
         }
     }
@@ -183,11 +190,16 @@ class VideoRecordActivity : AppCompatActivity() {
     private fun stopRecord() {
         if (mStartedFlag) {
             mStartedFlag = false
-
+            mBtnRecord.isEnabled = false
+            mBtnRecord.isClickable = false
             mBtnPlay.visibility = View.VISIBLE
             mLlRecordBtn.visibility = View.INVISIBLE
-
             handler.removeCallbacks(runnable)
+            stopTime = System.currentTimeMillis()
+            //延时确保录制时间大于1s
+            if (stopTime-startTime<1100) {
+                Thread.sleep(1100+startTime-stopTime)
+            }
             mRecorder?.stop()
             mRecorder?.reset()
             mRecorder?.release()
