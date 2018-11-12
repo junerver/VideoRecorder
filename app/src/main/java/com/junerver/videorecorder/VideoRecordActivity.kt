@@ -22,17 +22,23 @@ import java.util.*
 
 class VideoRecordActivity : AppCompatActivity() {
 
+
+    private val TAG = "VideoRecordActivity"
     private var mStartedFlag = false //录像中标志
-    private var mRecorder: MediaRecorder?=null
+    private var mPlayFlag = false
+    private lateinit var mRecorder: MediaRecorder
     private lateinit var mSurfaceHolder: SurfaceHolder
-    private var mCamera: Camera?=null
-    private var mMediaPlayer: MediaPlayer?=null
+    private lateinit var mCamera: Camera
+    private lateinit var mMediaPlayer: MediaPlayer
     private lateinit var path: String //最终视频路径
     private var timer = 0 //计时器
     private val maxSec = 10
     private lateinit var imgPath:String
     private var startTime:Long = 0L
     private var stopTime:Long = 0L
+    private var cameraReleaseEnable = true  //回收摄像头
+    private var recorderReleaseEnable = false  //回收recorder
+    private var playerReleaseEnable = false //回收palyer
 
 
     //用于记录视频录制时长
@@ -60,13 +66,14 @@ class VideoRecordActivity : AppCompatActivity() {
         holder.addCallback(object : SurfaceHolder.Callback {
             override fun surfaceChanged(holder: SurfaceHolder?, format: Int, width: Int, height: Int) {
                 mSurfaceHolder = holder!!
-                mCamera?.startPreview()
-                mCamera?.cancelAutoFocus()
+                mCamera.startPreview()
+                mCamera.cancelAutoFocus()
                 // 关键代码 该操作必须在开启预览之后进行（最后调用），
                 // 否则会黑屏，并提示该操作的下一步出错
                 // 只有执行该步骤后才可以使用MediaRecorder进行录制
                 // 否则会报 MediaRecorder(13280): start failed: -19
-                mCamera?.unlock()
+                mCamera.unlock()
+                cameraReleaseEnable = true
             }
 
             override fun surfaceDestroyed(holder: SurfaceHolder?) {
@@ -79,12 +86,12 @@ class VideoRecordActivity : AppCompatActivity() {
                     //使用后置摄像头
                     mCamera = Camera.open(Camera.CameraInfo.CAMERA_FACING_BACK)
                     //选装90度
-                    mCamera?.setDisplayOrientation(90)
-                    mCamera?.setPreviewDisplay(holder)
-                    val parameters = mCamera?.parameters
-                    parameters?.pictureFormat = PixelFormat.JPEG
-                    parameters?.focusMode = Camera.Parameters.FOCUS_MODE_CONTINUOUS_PICTURE//1连续对焦
-                    mCamera?.parameters = parameters
+                    mCamera.setDisplayOrientation(90)
+                    mCamera.setPreviewDisplay(holder)
+                    val parameters = mCamera.parameters
+                    parameters.pictureFormat = PixelFormat.JPEG
+                    parameters.focusMode = Camera.Parameters.FOCUS_MODE_CONTINUOUS_PICTURE//1连续对焦
+                    mCamera.parameters = parameters
                 } catch (e: RuntimeException) {
                     //开启摄像头失败
                     finish()
@@ -123,20 +130,26 @@ class VideoRecordActivity : AppCompatActivity() {
         }
     }
 
-    override fun onPause() {
-        super.onPause()
-        stopPlay()
-    }
-
     override fun onStop() {
         super.onStop()
-        mRecorder?.release()
-        mRecorder = null
-        mCamera?.stopPreview()
-        mCamera?.release()
-        mCamera = null
-        mMediaPlayer?.release()
-        mMediaPlayer=null
+        if (mPlayFlag) {
+            stopPlay()
+        }
+        if (mStartedFlag) {
+            stopRecord()
+        }
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        if (recorderReleaseEnable) mRecorder.release()
+        if (cameraReleaseEnable) {
+            mCamera.stopPreview()
+            mCamera.release()
+        }
+        if (playerReleaseEnable) {
+            mMediaPlayer.release()
+        }
     }
 
     //开始录制
@@ -148,28 +161,29 @@ class VideoRecordActivity : AppCompatActivity() {
             mLlRecordBtn.visibility = View.VISIBLE
             //开始计时
             handler.postDelayed(runnable, 1000)
+            recorderReleaseEnable = true
             mRecorder = MediaRecorder()
-            mRecorder?.reset()
-            mRecorder?.setCamera(mCamera)
+            mRecorder.reset()
+            mRecorder.setCamera(mCamera)
             // 这两项需要放在setOutputFormat之前
-            mRecorder?.setAudioSource(MediaRecorder.AudioSource.CAMCORDER)
-            mRecorder?.setVideoSource(MediaRecorder.VideoSource.CAMERA)
+            mRecorder.setAudioSource(MediaRecorder.AudioSource.CAMCORDER)
+            mRecorder.setVideoSource(MediaRecorder.VideoSource.CAMERA)
             // Set output file format
-            mRecorder?.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
+            mRecorder.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
             // 这两项需要放在setOutputFormat之后 IOS必须使用ACC
-            mRecorder?.setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
+            mRecorder.setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
             //使用MPEG_4_SP格式在华为P20 pro上停止录制时会出现
             //MediaRecorder: stop failed: -1007
             //java.lang.RuntimeException: stop failed.
             // at android.media.MediaRecorder.stop(Native Method)
-            mRecorder?.setVideoEncoder(MediaRecorder.VideoEncoder.H264)
+            mRecorder.setVideoEncoder(MediaRecorder.VideoEncoder.H264)
 
-            mRecorder?.setVideoSize(640, 480)
-            mRecorder?.setVideoFrameRate(30)
-            mRecorder?.setVideoEncodingBitRate(3 * 1024 * 1024)
-            mRecorder?.setOrientationHint(90)
+            mRecorder.setVideoSize(640, 480)
+            mRecorder.setVideoFrameRate(30)
+            mRecorder.setVideoEncodingBitRate(3 * 1024 * 1024)
+            mRecorder.setOrientationHint(90)
             //设置记录会话的最大持续时间（毫秒）
-            mRecorder?.setMaxDuration(30 * 1000)
+            mRecorder.setMaxDuration(30 * 1000)
             path = Environment
                     .getExternalStorageDirectory().path+File.separator+"Video"
             if (path != null) {
@@ -178,9 +192,10 @@ class VideoRecordActivity : AppCompatActivity() {
                     dir.mkdir()
                 }
                 path = dir.absolutePath + "/" + getDate() + ".mp4"
-                mRecorder?.setOutputFile(path)
-                mRecorder?.prepare()
-                mRecorder?.start()
+                Log.d(TAG,"文件路径： $path")
+                mRecorder.setOutputFile(path)
+                mRecorder.prepare()
+                mRecorder.start()
                 startTime = System.currentTimeMillis()
             }
         }
@@ -192,7 +207,7 @@ class VideoRecordActivity : AppCompatActivity() {
             mStartedFlag = false
             mBtnRecord.isEnabled = false
             mBtnRecord.isClickable = false
-            mBtnPlay.visibility = View.VISIBLE
+
             mLlRecordBtn.visibility = View.INVISIBLE
             handler.removeCallbacks(runnable)
             stopTime = System.currentTimeMillis()
@@ -200,15 +215,18 @@ class VideoRecordActivity : AppCompatActivity() {
             if (stopTime-startTime<1100) {
                 Thread.sleep(1100+startTime-stopTime)
             }
-            mRecorder?.stop()
-            mRecorder?.reset()
-            mRecorder?.release()
-            mRecorder = null
-            mCamera?.stopPreview()
-            mCamera?.release()
-            mCamera=null
+            mRecorder.stop()
+            mRecorder.reset()
+            mRecorder.release()
+            recorderReleaseEnable = false
+            mCamera.lock()
+            mCamera.stopPreview()
+            mCamera.release()
+            cameraReleaseEnable = false
+            mBtnPlay.visibility = View.VISIBLE
             MediaUtils.getImageForVideo(path) {
                 //获取到第一帧图片后再显示操作按钮
+                Log.d(TAG,"获取到了第一帧")
                 imgPath=it.absolutePath
                 mLlRecordOp.visibility = View.VISIBLE
             }
@@ -217,28 +235,38 @@ class VideoRecordActivity : AppCompatActivity() {
 
     //播放录像
     private fun playRecord() {
+        //修复录制时home键切出再次切回时无法播放的问题
+        if (cameraReleaseEnable) {
+            Log.d(TAG,"回收摄像头资源")
+            mCamera.lock()
+            mCamera.stopPreview()
+            mCamera.release()
+            cameraReleaseEnable = false
+        }
+        playerReleaseEnable = true
+        mPlayFlag = true
         mBtnPlay.visibility=View.INVISIBLE
-        mMediaPlayer?.reset()
+        mMediaPlayer.reset()
         var uri = Uri.parse(path)
         mMediaPlayer = MediaPlayer.create(VideoRecordActivity@this, uri)
-        mMediaPlayer?.setAudioStreamType(AudioManager.STREAM_MUSIC)
-        mMediaPlayer?.setDisplay(mSurfaceHolder)
-        mMediaPlayer?.setOnCompletionListener {
+        mMediaPlayer.setAudioStreamType(AudioManager.STREAM_MUSIC)
+        mMediaPlayer.setDisplay(mSurfaceHolder)
+        mMediaPlayer.setOnCompletionListener {
             //播放解释后再次显示播放按钮
             mBtnPlay.visibility =View.VISIBLE
         }
         try{
-            mMediaPlayer?.prepare()
+            mMediaPlayer.prepare()
         }catch (e:Exception){
             e.printStackTrace()
         }
-        mMediaPlayer?.start()
+        mMediaPlayer.start()
     }
 
     //停止播放录像
     private fun stopPlay() {
-        if (mMediaPlayer != null && mMediaPlayer!!.isPlaying) {
-            mMediaPlayer!!.stop()
+        if (mMediaPlayer.isPlaying) {
+            mMediaPlayer.stop()
         }
     }
 
