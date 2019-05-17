@@ -1,9 +1,23 @@
 # VideoRecorder
 Android 仿微信短视频录制
 
-项目代码分析请移步本人博客：[[28] —— Android 仿微信录制短视频（不使用 FFmpeg）](https://www.jianshu.com/p/2cb7b0110fde)
+项目代码分析请移步本人博客：[[28] —— Android 仿微信录制短视频（不使用 FFmpeg）](https://blog.csdn.net/u011133887/article/details/83654724)
+
+## 预览
+![VideoRecorder](art/1.jpg)
+![VideoRecorder](art/2.jpg)
+![VideoRecorder](art/3.png)
+![VideoRecorder](art/4.jpg)
 
 ## Bug 修复与更新日志：
+
+### 更新日志：
+- 1.1.5：增加进度条，修改依赖为 androidx  ——19.05.17
+- 1.1.4：修复录制时切出后无法再次播放的问题  ——18.11.12
+- 1.1.3：修复录制时间过短导致崩溃的问题 ——18.11.08
+- 1.1.2：修复在华为设备不兼容的问题 ——18.11.03
+- 1.1：修复录制视频无法在 ios 设备播放的问题 ——18.11.02 
+
 ### MediaRecorder: stop failed: -1007
  >java.lang.RuntimeException: stop failed.
   >        at android.media.MediaRecorder.stop(Native Method)
@@ -39,8 +53,3 @@ Android 仿微信短视频录制
 1. `try{}catch{}` 捕获改异常，并提示用户录制时间太短，然后允许用户重新录制；
 2. 人为延时，在 `stop()` 方法调用前确定总时长，当总时长小于 1s 时，`Thread.sleep(xxx)` 
 
-### 更新日志：
-- 1.1：修复录制视频无法在 ios 设备播放的问题 ——18.11.02 
-- 1.1.2：修复在华为设备不兼容的问题 ——18.11.03
-- 1.1.3：修复录制时间过短导致崩溃的问题 ——18.11.08
-- 1.1.4：修复录制时切出后无法再次播放的问题  ——18.11.12

@@ -2,7 +2,7 @@ package com.junerver.videorecorder
 
 import android.app.Activity
 import android.content.DialogInterface
-import android.support.v7.app.AlertDialog
+import androidx.appcompat.app.AlertDialog
 import android.view.KeyEvent
 import android.widget.Toast
 import com.tbruyelle.rxpermissions2.RxPermissions

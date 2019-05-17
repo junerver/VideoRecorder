@@ -11,7 +11,7 @@ import android.net.Uri
 import android.os.Bundle
 import android.os.Environment
 import android.os.Handler
-import android.support.v7.app.AppCompatActivity
+import androidx.appcompat.app.AppCompatActivity
 import android.util.Log
 import android.view.MotionEvent
 import android.view.SurfaceHolder
@@ -46,8 +46,11 @@ class VideoRecordActivity : AppCompatActivity() {
     var runnable = object : Runnable {
         override fun run() {
             timer++
-            if (timer < maxSec) {
-                handler.postDelayed(this, 1000)
+            if (timer < 100) {
+                // 之所以这里是100 是为了方便使用进度条
+                mProgress.progress = timer
+                //之所以每一百毫秒增加一次计时器是因为：总时长的毫秒数 / 100 即每次间隔延时的毫秒数 为 100
+                handler.postDelayed(this, 100)
             } else {
                 //停止录制 保存录制的流、显示供操作的ui
                 stopRecord()
@@ -159,6 +162,7 @@ class VideoRecordActivity : AppCompatActivity() {
             mLlRecordOp.visibility = View.INVISIBLE
             mBtnPlay.visibility = View.INVISIBLE
             mLlRecordBtn.visibility = View.VISIBLE
+            mProgress.visibility = View.VISIBLE //进度条可见
             //开始计时
             handler.postDelayed(runnable, 1000)
             recorderReleaseEnable = true
@@ -209,6 +213,8 @@ class VideoRecordActivity : AppCompatActivity() {
             mBtnRecord.isClickable = false
 
             mLlRecordBtn.visibility = View.INVISIBLE
+            mProgress.visibility = View.INVISIBLE
+
             handler.removeCallbacks(runnable)
             stopTime = System.currentTimeMillis()
             //延时确保录制时间大于1s
