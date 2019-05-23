@@ -18,10 +18,32 @@ import android.view.SurfaceHolder
 import android.view.View
 import kotlinx.android.synthetic.main.activity_video_record.*
 import java.io.File
+import java.io.FileOutputStream
+import java.io.IOException
+import java.nio.ByteBuffer
 import java.util.*
+import kotlin.concurrent.thread
+import android.hardware.camera2.CameraAccessException
+import android.R.attr.y
+import android.R.attr.x
+import android.content.Context
+import android.opengl.ETC1.getHeight
+import android.opengl.ETC1.getWidth
+import android.graphics.SurfaceTexture
+import android.hardware.camera2.CameraCharacteristics
+import android.hardware.camera2.params.StreamConfigurationMap
+import android.view.Display
+import android.content.Context.WINDOW_SERVICE
+import android.graphics.Point
+import android.hardware.camera2.CameraManager
+import androidx.core.content.ContextCompat.getSystemService
+import android.view.WindowManager
+
+
+public val TYPE_VIDEO = 0  //视频模式
+public val TYPE_IMAGE = 1  //拍照模式
 
 class VideoRecordActivity : AppCompatActivity() {
-
 
     private val TAG = "VideoRecordActivity"
     private var mStartedFlag = false //录像中标志
@@ -30,16 +52,19 @@ class VideoRecordActivity : AppCompatActivity() {
     private lateinit var mSurfaceHolder: SurfaceHolder
     private lateinit var mCamera: Camera
     private lateinit var mMediaPlayer: MediaPlayer
+    private lateinit var dirPath: String //目标文件夹地址
     private lateinit var path: String //最终视频路径
+    private lateinit var imgPath: String //缩略图 或 拍照模式图片位置
     private var timer = 0 //计时器
-    private val maxSec = 10
-    private lateinit var imgPath:String
-    private var startTime:Long = 0L
-    private var stopTime:Long = 0L
+    private val maxSec = 10 //视频总时长
+    private var startTime: Long = 0L //起始时间毫秒
+    private var stopTime: Long = 0L  //结束时间毫秒
     private var cameraReleaseEnable = true  //回收摄像头
     private var recorderReleaseEnable = false  //回收recorder
     private var playerReleaseEnable = false //回收palyer
 
+
+    private var mType = TYPE_VIDEO //默认为视频模式
 
     //用于记录视频录制时长
     var handler = Handler()
@@ -50,7 +75,7 @@ class VideoRecordActivity : AppCompatActivity() {
                 // 之所以这里是100 是为了方便使用进度条
                 mProgress.progress = timer
                 //之所以每一百毫秒增加一次计时器是因为：总时长的毫秒数 / 100 即每次间隔延时的毫秒数 为 100
-                handler.postDelayed(this, 100)
+                handler.postDelayed(this, maxSec * 10L)
             } else {
                 //停止录制 保存录制的流、显示供操作的ui
                 stopRecord()
@@ -88,10 +113,14 @@ class VideoRecordActivity : AppCompatActivity() {
                     mSurfaceHolder = holder!!
                     //使用后置摄像头
                     mCamera = Camera.open(Camera.CameraInfo.CAMERA_FACING_BACK)
-                    //选装90度
+                    //旋转90度
                     mCamera.setDisplayOrientation(90)
                     mCamera.setPreviewDisplay(holder)
                     val parameters = mCamera.parameters
+                    //注意此处需要根据摄像头获取最优像素，//如果不设置会按照系统默认配置最低160x120分辨率
+                    val size = getPreviewSize()
+                    parameters.setPictureSize(size.first, size.second)
+                    parameters.jpegQuality = 100
                     parameters.pictureFormat = PixelFormat.JPEG
                     parameters.focusMode = Camera.Parameters.FOCUS_MODE_CONTINUOUS_PICTURE//1连续对焦
                     mCamera.parameters = parameters
@@ -115,10 +144,18 @@ class VideoRecordActivity : AppCompatActivity() {
             playRecord()
         }
         mBtnCancle.setOnClickListener {
-            stopPlay()
-            var videoFile = File(path)
-            if (videoFile.exists() && videoFile.isFile) {
-                videoFile.delete()
+            if (mType == TYPE_VIDEO) {
+                stopPlay()
+                var videoFile = File(path)
+                if (videoFile.exists() && videoFile.isFile) {
+                    videoFile.delete()
+                }
+            } else {
+                //拍照模式
+                val imgFile = File(imgPath)
+                if (imgFile.exists() && imgFile.isFile) {
+                    imgFile.delete()
+                }
             }
             setResult(Activity.RESULT_CANCELED)
             finish()
@@ -128,7 +165,15 @@ class VideoRecordActivity : AppCompatActivity() {
             var intent = Intent()
             intent.putExtra("path", path)
             intent.putExtra("imagePath", imgPath)
-            setResult(Activity.RESULT_OK,intent)
+            intent.putExtra("type", mType)
+            if (mType == TYPE_IMAGE) {
+                //删除一开始创建的视频文件
+                var videoFile = File(path)
+                if (videoFile.exists() && videoFile.isFile) {
+                    videoFile.delete()
+                }
+            }
+            setResult(Activity.RESULT_OK, intent)
             finish()
         }
     }
@@ -188,15 +233,15 @@ class VideoRecordActivity : AppCompatActivity() {
             mRecorder.setOrientationHint(90)
             //设置记录会话的最大持续时间（毫秒）
             mRecorder.setMaxDuration(30 * 1000)
-            path = Environment
-                    .getExternalStorageDirectory().path+File.separator+"Video"
+            path = Environment.getExternalStorageDirectory().path + File.separator + "Video"
             if (path != null) {
                 var dir = File(path)
                 if (!dir.exists()) {
                     dir.mkdir()
                 }
+                dirPath = dir.absolutePath
                 path = dir.absolutePath + "/" + getDate() + ".mp4"
-                Log.d(TAG,"文件路径： $path")
+                Log.d(TAG, "文件路径： $path")
                 mRecorder.setOutputFile(path)
                 mRecorder.prepare()
                 mRecorder.start()
@@ -217,24 +262,67 @@ class VideoRecordActivity : AppCompatActivity() {
 
             handler.removeCallbacks(runnable)
             stopTime = System.currentTimeMillis()
-            //延时确保录制时间大于1s
-            if (stopTime-startTime<1100) {
-                Thread.sleep(1100+startTime-stopTime)
-            }
-            mRecorder.stop()
-            mRecorder.reset()
-            mRecorder.release()
-            recorderReleaseEnable = false
-            mCamera.lock()
-            mCamera.stopPreview()
-            mCamera.release()
-            cameraReleaseEnable = false
-            mBtnPlay.visibility = View.VISIBLE
-            MediaUtils.getImageForVideo(path) {
-                //获取到第一帧图片后再显示操作按钮
-                Log.d(TAG,"获取到了第一帧")
-                imgPath=it.absolutePath
-                mLlRecordOp.visibility = View.VISIBLE
+//          方法1 ： 延时确保录制时间大于1s
+//            if (stopTime-startTime<1100) {
+//                Thread.sleep(1100+startTime-stopTime)
+//            }
+//            mRecorder.stop()
+//            mRecorder.reset()
+//            mRecorder.release()
+//            recorderReleaseEnable = false
+//            mCamera.lock()
+//            mCamera.stopPreview()
+//            mCamera.release()
+//            cameraReleaseEnable = false
+//            mBtnPlay.visibility = View.VISIBLE
+//            MediaUtils.getImageForVideo(path) {
+//                //获取到第一帧图片后再显示操作按钮
+//                Log.d(TAG,"获取到了第一帧")
+//                imgPath=it.absolutePath
+//                mLlRecordOp.visibility = View.VISIBLE
+//            }
+
+
+//          方法2 ： 捕捉异常改为拍照
+            try {
+                mRecorder.stop()
+                mRecorder.reset()
+                mRecorder.release()
+                recorderReleaseEnable = false
+                mCamera.lock()
+                mCamera.stopPreview()
+                mCamera.release()
+                cameraReleaseEnable = false
+                mBtnPlay.visibility = View.VISIBLE
+                MediaUtils.getImageForVideo(path) {
+                    //获取到第一帧图片后再显示操作按钮
+                    Log.d(TAG, "获取到了第一帧")
+                    imgPath = it.absolutePath
+                    mLlRecordOp.visibility = View.VISIBLE
+                }
+            } catch (e: java.lang.RuntimeException) {
+                //当catch到RE时，说明是录制时间过短，此时将由录制改变为拍摄
+                mType = TYPE_IMAGE
+                Log.e("拍摄时间过短", e.message)
+                mRecorder.reset()
+                mRecorder.release()
+                recorderReleaseEnable = false
+                mCamera.takePicture(null, null, Camera.PictureCallback { data, camera ->
+                    data?.let {
+                        saveImage(it) { imagepath ->
+                            Log.d(TAG, "转为拍照，获取到图片数据 $imagepath")
+                            imgPath = imagepath
+                            mCamera.lock()
+                            mCamera.stopPreview()
+                            mCamera.release()
+                            cameraReleaseEnable = false
+                            runOnUiThread {
+                                mBtnPlay.visibility = View.INVISIBLE
+                                mLlRecordOp.visibility = View.VISIBLE
+                            }
+                        }
+                    }
+                })
             }
         }
     }
@@ -243,7 +331,7 @@ class VideoRecordActivity : AppCompatActivity() {
     private fun playRecord() {
         //修复录制时home键切出再次切回时无法播放的问题
         if (cameraReleaseEnable) {
-            Log.d(TAG,"回收摄像头资源")
+            Log.d(TAG, "回收摄像头资源")
             mCamera.lock()
             mCamera.stopPreview()
             mCamera.release()
@@ -251,19 +339,19 @@ class VideoRecordActivity : AppCompatActivity() {
         }
         playerReleaseEnable = true
         mPlayFlag = true
-        mBtnPlay.visibility=View.INVISIBLE
+        mBtnPlay.visibility = View.INVISIBLE
         mMediaPlayer.reset()
         var uri = Uri.parse(path)
-        mMediaPlayer = MediaPlayer.create(VideoRecordActivity@this, uri)
+        mMediaPlayer = MediaPlayer.create(VideoRecordActivity@ this, uri)
         mMediaPlayer.setAudioStreamType(AudioManager.STREAM_MUSIC)
         mMediaPlayer.setDisplay(mSurfaceHolder)
         mMediaPlayer.setOnCompletionListener {
             //播放解释后再次显示播放按钮
-            mBtnPlay.visibility =View.VISIBLE
+            mBtnPlay.visibility = View.VISIBLE
         }
-        try{
+        try {
             mMediaPlayer.prepare()
-        }catch (e:Exception){
+        } catch (e: Exception) {
             e.printStackTrace()
         }
         mMediaPlayer.start()
@@ -289,5 +377,74 @@ class VideoRecordActivity : AppCompatActivity() {
         var hour = ca.get(Calendar.HOUR)           // 小时
         var second = ca.get(Calendar.SECOND)       // 秒
         return "" + year + (month + 1) + day + hour + minute + second
+    }
+
+
+    /**
+     * @Description
+     * @Author Junerver
+     * Created at 2019/5/23 15:13
+     * @param data   从摄像头拍照回调获取的字节数组
+     * @param onDone 保存图片完毕后的回调函数
+     * @return
+     */
+    fun saveImage(data: ByteArray, onDone: (path: String) -> Unit) {
+        thread {
+            val imgFileName = "IMG_" + getDate() + ".jpg"
+            val imgFile = File(dirPath + File.separator + imgFileName)
+            val outputStream = FileOutputStream(imgFile)
+            val fileChannel = outputStream.channel
+            val buffer = ByteBuffer.allocate(data.size)
+            try {
+                buffer.put(data)
+                buffer.flip()
+                fileChannel.write(buffer)
+            } catch (e: IOException) {
+                Log.e("写图片失败", e.message)
+            } finally {
+                try {
+                    outputStream.close()
+                    fileChannel.close()
+                    buffer.clear()
+                } catch (e: IOException) {
+                    Log.e("关闭图片失败", e.message)
+                }
+            }
+            onDone(imgFile.absolutePath)
+        }
+    }
+
+    //从底层拿camera支持的previewsize，完了和屏幕分辨率做差，diff最小的就是最佳预览分辨率
+    private fun getPreviewSize(): Pair<Int, Int> {
+        var bestPreviewWidth: Int = 1920
+        var bestPreviewHeight: Int = 1080
+        var mCameraPreviewWidth: Int
+        var mCameraPreviewHeight: Int
+        var diffs = Integer.MAX_VALUE
+        val windowManager = getSystemService(Context.WINDOW_SERVICE) as WindowManager
+        val display = windowManager.defaultDisplay
+        val screenResolution = Point(display.width, display.height)
+        val availablePreviewSizes = mCamera.parameters.supportedPreviewSizes
+        Log.e(TAG, "屏幕宽度 ${screenResolution.x}  屏幕高度${screenResolution.y}")
+        for (previewSize in availablePreviewSizes) {
+            Log.v(TAG, " PreviewSizes = $previewSize")
+            mCameraPreviewWidth = previewSize.width
+            mCameraPreviewHeight = previewSize.height
+            val newDiffs = Math.abs(mCameraPreviewWidth - screenResolution.y) + Math.abs(mCameraPreviewHeight - screenResolution.x)
+            Log.v(TAG, "newDiffs = $newDiffs")
+            if (newDiffs == 0) {
+                bestPreviewWidth = mCameraPreviewWidth
+                bestPreviewHeight = mCameraPreviewHeight
+                break
+            }
+            if (diffs > newDiffs) {
+                bestPreviewWidth = mCameraPreviewWidth
+                bestPreviewHeight = mCameraPreviewHeight
+                diffs = newDiffs
+            }
+            Log.e(TAG, "${previewSize.width} ${previewSize.height}  宽度 $bestPreviewWidth 高度 $bestPreviewHeight")
+        }
+        Log.e(TAG, "最佳宽度 $bestPreviewWidth 最佳高度 $bestPreviewHeight")
+        return Pair(bestPreviewWidth, bestPreviewHeight)
     }
 }

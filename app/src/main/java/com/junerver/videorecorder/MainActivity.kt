@@ -3,6 +3,7 @@ package com.junerver.videorecorder
 import android.Manifest
 import android.app.Activity
 import android.content.Intent
+
 import android.os.Bundle
 import androidx.appcompat.app.AppCompatActivity
 import kotlinx.android.synthetic.main.activity_main.*
@@ -26,7 +27,12 @@ class MainActivity : AppCompatActivity() {
             if (requestCode == REQUEST_VIDEO) {
                 var path = data?.getStringExtra("path")
                 var imgPath = data?.getStringExtra("imagePath")
-                mTvResult.append("视频地址：\n\r $path \n\r缩略图地址：\n\r $imgPath")
+                val type = data?.getIntExtra("type",-1)
+                if (type == TYPE_VIDEO) {
+                    mTvResult.text = "视频地址：\n\r$path \n\r缩略图地址：\n\r$imgPath"
+                } else if (type == TYPE_IMAGE) {
+                    mTvResult.text = "图片地址：\n\r$imgPath"
+                }
             }
         }
     }
