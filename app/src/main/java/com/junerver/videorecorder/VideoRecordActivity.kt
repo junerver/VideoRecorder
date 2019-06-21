@@ -2,7 +2,6 @@ package com.junerver.videorecorder
 
 import android.app.Activity
 import android.content.Intent
-import android.graphics.PixelFormat
 import android.hardware.Camera
 import android.media.AudioManager
 import android.media.MediaPlayer
@@ -29,15 +28,15 @@ import android.R.attr.x
 import android.content.Context
 import android.opengl.ETC1.getHeight
 import android.opengl.ETC1.getWidth
-import android.graphics.SurfaceTexture
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.params.StreamConfigurationMap
 import android.view.Display
 import android.content.Context.WINDOW_SERVICE
-import android.graphics.Point
+import android.graphics.*
 import android.hardware.camera2.CameraManager
 import androidx.core.content.ContextCompat.getSystemService
 import android.view.WindowManager
+import java.io.BufferedOutputStream
 
 
 public val TYPE_VIDEO = 0  //视频模式
@@ -78,6 +77,7 @@ class VideoRecordActivity : AppCompatActivity() {
                 handler.postDelayed(this, maxSec * 10L)
             } else {
                 //停止录制 保存录制的流、显示供操作的ui
+                Log.d("到最大拍摄时间","")
                 stopRecord()
                 System.currentTimeMillis()
             }
@@ -132,11 +132,11 @@ class VideoRecordActivity : AppCompatActivity() {
             }
         })
         mBtnRecord.setOnTouchListener { _, event ->
-            if (event.action == MotionEvent.ACTION_UP) {
-                stopRecord()
-            }
             if (event.action == MotionEvent.ACTION_DOWN) {
                 startRecord()
+            }
+            if (event.action == MotionEvent.ACTION_UP) {
+                stopRecord()
             }
             false
         }
@@ -184,6 +184,7 @@ class VideoRecordActivity : AppCompatActivity() {
             stopPlay()
         }
         if (mStartedFlag) {
+            Log.d("页面stop","")
             stopRecord()
         }
     }
@@ -233,7 +234,7 @@ class VideoRecordActivity : AppCompatActivity() {
             mRecorder.setOrientationHint(90)
             //设置记录会话的最大持续时间（毫秒）
             mRecorder.setMaxDuration(30 * 1000)
-            path = Environment.getExternalStorageDirectory().path + File.separator + "Video"
+            path = Environment.getExternalStorageDirectory().path + File.separator + "VideoRecorder"
             if (path != null) {
                 var dir = File(path)
                 if (!dir.exists()) {
@@ -390,26 +391,40 @@ class VideoRecordActivity : AppCompatActivity() {
      */
     fun saveImage(data: ByteArray, onDone: (path: String) -> Unit) {
         thread {
+            //方式1 ：java nio 保存图片 保存后的图片存在0度旋转角
+//            val imgFileName = "IMG_" + getDate() + ".jpg"
+//            val imgFile = File(dirPath + File.separator + imgFileName)
+//            val outputStream = FileOutputStream(imgFile)
+//            val fileChannel = outputStream.channel
+//            val buffer = ByteBuffer.allocate(data.size)
+//            try {
+//                buffer.put(data)
+//                buffer.flip()
+//                fileChannel.write(buffer)
+//            } catch (e: IOException) {
+//                Log.e("写图片失败", e.message)
+//            } finally {
+//                try {
+//                    outputStream.close()
+//                    fileChannel.close()
+//                    buffer.clear()
+//                } catch (e: IOException) {
+//                    Log.e("关闭图片失败", e.message)
+//                }
+//            }
+
+            //方式2： bitmap保存 将拍摄结果旋转90度
             val imgFileName = "IMG_" + getDate() + ".jpg"
             val imgFile = File(dirPath + File.separator + imgFileName)
-            val outputStream = FileOutputStream(imgFile)
-            val fileChannel = outputStream.channel
-            val buffer = ByteBuffer.allocate(data.size)
-            try {
-                buffer.put(data)
-                buffer.flip()
-                fileChannel.write(buffer)
-            } catch (e: IOException) {
-                Log.e("写图片失败", e.message)
-            } finally {
-                try {
-                    outputStream.close()
-                    fileChannel.close()
-                    buffer.clear()
-                } catch (e: IOException) {
-                    Log.e("关闭图片失败", e.message)
-                }
-            }
+            val bitmap = BitmapFactory.decodeByteArray(data, 0, data.size)
+            val newBitmap = PictureUtils.rotateBitmap(bitmap,90)
+            imgFile.createNewFile()
+            val os = BufferedOutputStream( FileOutputStream(imgFile))
+            newBitmap.compress(Bitmap.CompressFormat.JPEG, 100, os)
+            os.flush()
+            os.close()
+            val degree = PictureUtils.getBitmapDegree(imgFile.absolutePath)
+            Log.d("图片角度为：", "$degree")
             onDone(imgFile.absolutePath)
         }
     }
