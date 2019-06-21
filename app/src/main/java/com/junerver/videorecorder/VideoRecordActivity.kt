@@ -210,7 +210,7 @@ class VideoRecordActivity : AppCompatActivity() {
             mLlRecordBtn.visibility = View.VISIBLE
             mProgress.visibility = View.VISIBLE //进度条可见
             //开始计时
-            handler.postDelayed(runnable, 1000)
+            handler.postDelayed(runnable, maxSec * 10L)
             recorderReleaseEnable = true
             mRecorder = MediaRecorder()
             mRecorder.reset()
