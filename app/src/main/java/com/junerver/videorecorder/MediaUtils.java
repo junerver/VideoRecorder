@@ -113,7 +113,11 @@ public class MediaUtils {
             } catch (IOException e) {
                 e.printStackTrace();
             }
-            mmr.release();
+            try {
+                mmr.release();
+            } catch (IOException e) {
+                throw new RuntimeException(e);
+            }
             return f;
         }
 

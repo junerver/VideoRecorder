@@ -92,7 +92,7 @@ class VideoRecordActivity : AppCompatActivity() {
 
         var holder = mSurfaceview.holder
         holder.addCallback(object : SurfaceHolder.Callback {
-            override fun surfaceChanged(holder: SurfaceHolder?, format: Int, width: Int, height: Int) {
+            override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
                 mSurfaceHolder = holder!!
                 mCamera.apply {
                     startPreview()
@@ -106,11 +106,11 @@ class VideoRecordActivity : AppCompatActivity() {
                 cameraReleaseEnable = true
             }
 
-            override fun surfaceDestroyed(holder: SurfaceHolder?) {
+            override fun surfaceDestroyed(holder: SurfaceHolder) {
                 handler.removeCallbacks(runnable)
             }
 
-            override fun surfaceCreated(holder: SurfaceHolder?) {
+            override fun surfaceCreated(holder: SurfaceHolder) {
                 try {
                     mSurfaceHolder = holder!!
                     //使用后置摄像头
@@ -321,17 +321,17 @@ class VideoRecordActivity : AppCompatActivity() {
             } catch (e: java.lang.RuntimeException) {
                 //当catch到RE时，说明是录制时间过短，此时将由录制改变为拍摄
                 mType = TYPE_IMAGE
-                Log.e("拍摄时间过短", e.message)
+                Log.e("拍摄时间过短", e.message!!)
                 mRecorder.apply {
                     reset()
                     release()
                 }
                 recorderReleaseEnable = false
-                mCamera.takePicture(null, null, Camera.PictureCallback { data, camera ->
+                mCamera.takePicture(null, null) { data, _ ->
                     data?.let {
-                        saveImage(it) { imagepath ->
-                            Log.d(TAG, "转为拍照，获取到图片数据 $imagepath")
-                            imgPath = imagepath
+                        saveImage(it) { imagePath ->
+                            Log.d(TAG, "转为拍照，获取到图片数据 $imagePath")
+                            imgPath = imagePath
                             mCamera.apply {
                                 lock()
                                 stopPreview()
@@ -344,7 +344,7 @@ class VideoRecordActivity : AppCompatActivity() {
                             }
                         }
                     }
-                })
+                }
             }
         }
     }
