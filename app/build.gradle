@@ -35,4 +35,5 @@ dependencies {
     implementation 'io.reactivex.rxjava2:rxjava:2.1.0'
     implementation 'me.zhanghai.android.materialprogressbar:library:1.6.1'
     implementation("androidx.lifecycle:lifecycle-common:2.4.0")
+    implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.4.0")
 }

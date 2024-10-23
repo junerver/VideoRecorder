@@ -1,149 +1,119 @@
-package com.junerver.videorecorder;
+package com.junerver.videorecorder
 
-import android.content.Context;
-import android.graphics.Bitmap;
-import android.graphics.Matrix;
-import android.media.MediaMetadataRetriever;
-import android.net.Uri;
-import android.os.AsyncTask;
-import android.os.Build;
-import android.os.Environment;
-import androidx.core.content.FileProvider;
-
-import java.io.File;
-import java.io.FileNotFoundException;
-import java.io.FileOutputStream;
-import java.io.IOException;
-import java.text.SimpleDateFormat;
-import java.util.Date;
-import java.util.HashMap;
+import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.Matrix
+import android.media.MediaMetadataRetriever
+import android.net.Uri
+import android.os.AsyncTask
+import android.os.Build
+import android.os.Environment
+import androidx.core.content.FileProvider
+import com.junerver.videorecorder.MediaUtils.getOutputMediaFile
+import java.io.File
+import java.io.FileNotFoundException
+import java.io.FileOutputStream
+import java.io.IOException
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+import kotlin.contracts.ExperimentalContracts
+import kotlin.contracts.contract
+import kotlin.coroutines.Continuation
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
+import kotlin.coroutines.suspendCoroutine
 
 /**
  * https://www.jianshu.com/p/bd308c8371dd
  */
-public class MediaUtils {
-    public static final int MEDIA_TYPE_IMAGE = 1;
-    public static final int MEDIA_TYPE_VIDEO = 2;
-    public static File file;
+object MediaUtils {
+  const val MEDIA_TYPE_IMAGE: Int = 1
+  const val MEDIA_TYPE_VIDEO: Int = 2
 
-    /**
-     * Create a file Uri for saving an image or video
-     */
-    public static Uri getOutputMediaFileUri(Context context, int type) {
-        Uri uri = null;
-        //适配Android N
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-            return FileProvider.getUriForFile(context, context.getApplicationContext().getPackageName() + ".provider", getOutputMediaFile(type));
-        } else {
-            return Uri.fromFile(getOutputMediaFile(type));
-        }
+  /**
+   * Create a file Uri for saving an image or video
+   */
+  fun getOutputMediaFileUri(context: Context, type: Int): Uri {
+    val uri: Uri? = null
+    //适配Android N
+    return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+      FileProvider.getUriForFile(
+        context,
+        context.applicationContext.packageName + ".provider",
+        getOutputMediaFile(type)!!
+      )
+    } else {
+      Uri.fromFile(getOutputMediaFile(type))
     }
+  }
 
-    /**
-     * Create a File for saving an image or video
-     */
-    public static File getOutputMediaFile(int type) {
-        // To be safe, you should check that the SDCard is mounted
-        // using Environment.getExternalStorageState() before doing this.
-        File mediaStorageDir = new File(Environment.getExternalStoragePublicDirectory(
-                Environment.DIRECTORY_PICTURES), "image");
-        // This location works best if you want the created images to be shared
-        // between applications and persist after your app has been uninstalled.
-        // Create the storage directory if it does not exist
-        if (!mediaStorageDir.exists()) {
-            if (!mediaStorageDir.mkdirs()) {
-                return null;
-            }
-        }
-        // Create a media file name
-        String timeStamp = new SimpleDateFormat("yyyyMMdd_HHmmss").format(new Date());
-        File mediaFile;
-        if (type == MEDIA_TYPE_IMAGE) {
-            mediaFile = new File(mediaStorageDir.getPath() + File.separator +
-                    "IMG_" + timeStamp + ".jpg");
-        } else if (type == MEDIA_TYPE_VIDEO) {
-            mediaFile = new File(mediaStorageDir.getPath() + File.separator +
-                    "VID_" + timeStamp + ".mp4");
-        } else {
-            return null;
-        }
-        file = mediaFile;
-        return mediaFile;
+  /**
+   * Create a File for saving an image or video
+   */
+  fun getOutputMediaFile(type: Int): File? {
+    require(type == MEDIA_TYPE_VIDEO || type == MEDIA_TYPE_IMAGE) {
+      "错误的文件类型"
     }
-
-    /**
-     * 获取视频的第一帧图片
-     */
-    public static void getImageForVideo(String videoPath, OnLoadVideoImageListener listener) {
-        LoadVideoImageTask task = new LoadVideoImageTask(listener);
-        task.execute(videoPath);
+    val mediaStorageDir = File(
+      Environment.getExternalStoragePublicDirectory(
+        Environment.DIRECTORY_PICTURES
+      ), "image"
+    )
+    if (!mediaStorageDir.exists()) {
+      if (!mediaStorageDir.mkdirs()) {
+        return null
+      }
     }
-
-    public static class LoadVideoImageTask extends AsyncTask<String, Integer, File> {
-        private OnLoadVideoImageListener listener;
-
-        public LoadVideoImageTask(OnLoadVideoImageListener listener) {
-            this.listener = listener;
-        }
-
-        @Override
-        protected File doInBackground(String... params) {
-            MediaMetadataRetriever mmr = new MediaMetadataRetriever();
-            String path = params[0];
-            if (path.startsWith("http"))
-                //获取网络视频第一帧图片
-                mmr.setDataSource(path, new HashMap());
-            else
-                //本地视频
-                mmr.setDataSource(path);
-            Bitmap bitmap = mmr.getFrameAtTime();
-            //保存图片
-            File f = getOutputMediaFile(MEDIA_TYPE_IMAGE);
-            if (f.exists()) {
-                f.delete();
-            }
-            try {
-                Bitmap newbitmap = resizeBitmap(480, 480, bitmap);
-                FileOutputStream out = new FileOutputStream(f);
-                newbitmap.compress(Bitmap.CompressFormat.JPEG, 60, out);
-                out.flush();
-                out.close();
-            } catch (FileNotFoundException e) {
-                e.printStackTrace();
-            } catch (IOException e) {
-                e.printStackTrace();
-            }
-            try {
-                mmr.release();
-            } catch (IOException e) {
-                throw new RuntimeException(e);
-            }
-            return f;
-        }
-
-        @Override
-        protected void onPostExecute(File file) {
-            super.onPostExecute(file);
-            if (listener != null) {
-                listener.onLoadImage(file);
-            }
-        }
+    val timeStamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.CHINA).format(Date())
+    return when (type) {
+      MEDIA_TYPE_IMAGE -> File(mediaStorageDir.path + File.separator + "IMG_" + timeStamp + ".jpg")
+      MEDIA_TYPE_VIDEO -> File(mediaStorageDir.path + File.separator + "VID_" + timeStamp + ".mp4")
+      else -> null
     }
+  }
 
-    public interface OnLoadVideoImageListener {
-        void onLoadImage(File file);
+  /**
+   * 获取视频的第一帧图片
+   */
+  suspend fun getImageForVideo(videoPath: String): File? = suspendCoroutine { continuation ->
+    val mmr = MediaMetadataRetriever()
+    if (videoPath.startsWith("http")) {
+      //获取网络视频第一帧图片
+      mmr.setDataSource(videoPath, mutableMapOf())
+    } else {
+      //本地视频
+      mmr.setDataSource(videoPath)
     }
-
-    public static Bitmap resizeBitmap(float newWidth, float newHeight, Bitmap bitmap) {
-
-        Matrix matrix = new Matrix();
-        matrix.postScale(newWidth / bitmap.getWidth(),
-
-                newHeight / bitmap.getHeight());
-
-        Bitmap newBitmap = Bitmap.createBitmap(bitmap, 0, 0, bitmap.getWidth(),
-                bitmap.getHeight(), matrix, true);
-
-        return newBitmap;
+    val bitmap = mmr.frameAtTime
+    //保存图片
+    val f = getOutputMediaFile(MEDIA_TYPE_IMAGE)
+    if (f?.exists() == true) {
+      f.delete()
     }
+    val newBitmap = resizeBitmap(480f, 480f, bitmap)
+    try {
+      FileOutputStream(f).use {
+        newBitmap.compress(Bitmap.CompressFormat.JPEG, 60, it)
+        it.flush()
+      }
+      mmr.release()
+    } catch (e: IOException) {
+      continuation.resumeWithException(e)
+    }
+    continuation.resume(f)
+  }
+
+  private fun resizeBitmap(newWidth: Float, newHeight: Float, bitmap: Bitmap?): Bitmap {
+    val matrix = Matrix()
+    matrix.postScale(
+      newWidth / bitmap!!.width,
+      newHeight / bitmap.height
+    )
+    val newBitmap = Bitmap.createBitmap(
+      bitmap, 0, 0, bitmap.width,
+      bitmap.height, matrix, true
+    )
+    return newBitmap
+  }
 }

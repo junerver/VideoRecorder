@@ -13,6 +13,16 @@
         android:layout_height="match_parent" />
 
     <Button
+        android:id="@+id/mBtnFlip"
+        android:layout_width="35dp"
+        android:layout_height="35dp"
+        android:layout_marginTop="44dp"
+        android:layout_marginEnd="44dp"
+        android:background="@drawable/btn_flip"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintTop_toTopOf="parent" />
+
+    <Button
         android:id="@+id/mBtnPlay"
         android:layout_width="70dp"
         android:layout_height="70dp"
