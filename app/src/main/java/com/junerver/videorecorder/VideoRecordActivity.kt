@@ -1,5 +1,3 @@
-@file:Suppress("DEPRECATION")
-
 package com.junerver.videorecorder
 
 import android.annotation.SuppressLint
@@ -15,15 +13,35 @@ import android.media.AudioManager
 import android.media.MediaPlayer
 import android.media.MediaRecorder
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.os.Environment
 import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import android.view.MotionEvent
 import android.view.SurfaceHolder
 import android.view.View
 import android.view.WindowManager
+import android.widget.Toast
+import androidx.annotation.RequiresApi
 import androidx.appcompat.app.AppCompatActivity
+import androidx.camera.core.AspectRatio
+import androidx.camera.core.CameraInfo
+import androidx.camera.core.CameraInfoUnavailableException
+import androidx.camera.core.CameraSelector
+import androidx.camera.core.CameraState
+import androidx.camera.core.ImageAnalysis
+import androidx.camera.core.ImageCapture
+import androidx.camera.core.ImageProcessor
+import androidx.camera.core.ImageProxy
+import androidx.camera.core.Preview
+import androidx.camera.core.UseCase
+import androidx.camera.lifecycle.ProcessCameraProvider
+import androidx.concurrent.futures.await
+import androidx.core.content.ContentProviderCompat.requireContext
+import androidx.core.content.ContextCompat
+import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.lifecycleScope
 import kotlinx.android.synthetic.main.activity_video_record.mBtnCancle
 import kotlinx.android.synthetic.main.activity_video_record.mBtnFlip
@@ -34,16 +52,25 @@ import kotlinx.android.synthetic.main.activity_video_record.mLlRecordBtn
 import kotlinx.android.synthetic.main.activity_video_record.mLlRecordOp
 import kotlinx.android.synthetic.main.activity_video_record.mProgress
 import kotlinx.android.synthetic.main.activity_video_record.mSurfaceview
+import kotlinx.android.synthetic.main.activity_video_record.view_finder
 import kotlinx.coroutines.launch
 import java.io.BufferedOutputStream
 import java.io.File
 import java.io.FileOutputStream
+import java.nio.ByteBuffer
 import java.util.Calendar
+import java.util.concurrent.Executors
 import kotlin.concurrent.thread
+import kotlin.math.abs
+import kotlin.math.max
+import kotlin.math.min
 
 
 public val TYPE_VIDEO = 0  //视频模式
 public val TYPE_IMAGE = 1  //拍照模式
+
+typealias CameraX = androidx.camera.core.Camera
+typealias LumaListener = (luma: Double) -> Unit
 
 class VideoRecordActivity : AppCompatActivity() {
 
@@ -64,17 +91,27 @@ class VideoRecordActivity : AppCompatActivity() {
   private var cameraReleaseEnable = true  //回收摄像头
   private var recorderReleaseEnable = false  //回收recorder
   private var playerReleaseEnable = false //回收plyer
-
   private var mType = TYPE_VIDEO //默认为视频模式
-
   private lateinit var mHolder: SurfaceHolder
+
   private val cameraIds =
     arrayOf(Camera.CameraInfo.CAMERA_FACING_BACK, Camera.CameraInfo.CAMERA_FACING_FRONT)
   private var currentCameraIndex = 0
 
+  private val cameraExecutor = Executors.newSingleThreadExecutor()
+  private lateinit var context:Context
+
+  private var displayId: Int = -1
+  private var lensFacing: Int = CameraSelector.LENS_FACING_BACK
+  private var preview: Preview? = null
+  private var imageCapture: ImageCapture? = null
+  private var imageAnalyzer: ImageAnalysis? = null
+  private var camera: CameraX? = null
+  private var cameraProvider: ProcessCameraProvider? = null
+  private lateinit var windowManager: WindowManager
 
   //用于记录视频录制时长
-  var handler = Handler()
+  var handler = Handler(Looper.getMainLooper())
   var runnable = object : Runnable {
     override fun run() {
       timer++
@@ -92,21 +129,23 @@ class VideoRecordActivity : AppCompatActivity() {
 
   }
 
+  @RequiresApi(Build.VERSION_CODES.R)
   @SuppressLint("ClickableViewAccessibility")
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
     setContentView(R.layout.activity_video_record)
     mMediaPlayer = MediaPlayer()
+    context = this
 
-
-    setupHolder()
+    mBtnFlip.isEnabled = false
     mBtnFlip.setOnClickListener {
-      mCamera?.apply {
-        stopPreview()
-        release()
+      lensFacing = if (CameraSelector.LENS_FACING_FRONT == lensFacing) {
+        CameraSelector.LENS_FACING_BACK
+      } else {
+        CameraSelector.LENS_FACING_FRONT
       }
-      switchCamera()
-      openCamera(mHolder)
+      // Re-bind use cases to update selected camera
+      bindCameraUseCases()
     }
     mBtnRecord.setOnTouchListener { _, event ->
       if (event.action == MotionEvent.ACTION_DOWN) {
@@ -154,81 +193,230 @@ class VideoRecordActivity : AppCompatActivity() {
       setResult(Activity.RESULT_OK, intent)
       finish()
     }
+
   }
 
+  private suspend fun setUpCamera() {
+    cameraProvider = ProcessCameraProvider.getInstance(context).await()
+
+    // Select lensFacing depending on the available cameras
+    lensFacing = when {
+      hasBackCamera() -> CameraSelector.LENS_FACING_BACK
+      hasFrontCamera() -> CameraSelector.LENS_FACING_FRONT
+      else -> throw IllegalStateException("Back and front camera are unavailable")
+    }
+
+    // Enable or disable switching between cameras
+    updateCameraSwitchButton()
+
+    // Build and bind the camera use cases
+    bindCameraUseCases()
+  }
+
+  /** Enabled or disabled a button to switch cameras depending on the available cameras */
+  private fun updateCameraSwitchButton() {
+    try {
+      mBtnFlip?.isEnabled = hasBackCamera() && hasFrontCamera()
+    } catch (exception: CameraInfoUnavailableException) {
+      mBtnFlip?.isEnabled = false
+    }
+  }
+
+  /** Returns true if the device has an available back camera. False otherwise */
+  private fun hasBackCamera(): Boolean {
+    return cameraProvider?.hasCamera(CameraSelector.DEFAULT_BACK_CAMERA) ?: false
+  }
+
+  /** Returns true if the device has an available front camera. False otherwise */
+  private fun hasFrontCamera(): Boolean {
+    return cameraProvider?.hasCamera(CameraSelector.DEFAULT_FRONT_CAMERA) ?: false
+  }
+
+  /** Declare and bind preview, capture and analysis use cases */
+  private fun bindCameraUseCases() {
+
+    // Get screen metrics used to setup camera for full screen resolution
+    val metrics = windowManager.currentWindowMetrics.bounds
+    Log.d(TAG, "Screen metrics: ${metrics.width()} x ${metrics.height()}")
+
+    val screenAspectRatio = aspectRatio(metrics.width(), metrics.height())
+    Log.d(TAG, "Preview aspect ratio: $screenAspectRatio")
+
+    val rotation = view_finder.display.rotation
+
+    // CameraProvider
+    val cameraProvider = cameraProvider
+      ?: throw IllegalStateException("Camera initialization failed.")
+
+    // CameraSelector
+    val cameraSelector = CameraSelector.Builder().requireLensFacing(lensFacing).build()
+
+    // Preview
+    preview = Preview.Builder()
+      // We request aspect ratio but no resolution
+      .setTargetAspectRatio(screenAspectRatio)
+      // Set initial target rotation
+      .setTargetRotation(rotation)
+      .build()
+
+    // ImageCapture
+    imageCapture = ImageCapture.Builder()
+      .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
+      // We request aspect ratio but no resolution to match preview config, but letting
+      // CameraX optimize for whatever specific resolution best fits our use cases
+      .setTargetAspectRatio(screenAspectRatio)
+      // Set initial target rotation, we will have to call this again if rotation changes
+      // during the lifecycle of this use case
+      .setTargetRotation(rotation)
+      .build()
+
+    // ImageAnalysis
+    imageAnalyzer = ImageAnalysis.Builder()
+      // We request aspect ratio but no resolution
+      .setTargetAspectRatio(screenAspectRatio)
+      // Set initial target rotation, we will have to call this again if rotation changes
+      // during the lifecycle of this use case
+      .setTargetRotation(rotation)
+      .build()
+      // The analyzer can then be assigned to the instance
+      .also {
+        it.setAnalyzer(cameraExecutor, LuminosityAnalyzer { luma ->
+          // Values returned from our analyzer are passed to the attached listener
+          // We log image analysis results here - you should do something useful
+          // instead!
+          Log.d(TAG, "Average luminosity: $luma")
+        })
+      }
+
+    // Must unbind the use-cases before rebinding them
+    cameraProvider.unbindAll()
+
+    if (camera != null) {
+      // Must remove observers from the previous camera instance
+      removeCameraStateObservers(camera!!.cameraInfo)
+    }
+
+    try {
+      // A variable number of use-cases can be passed here -
+      // camera provides access to CameraControl & CameraInfo
+      camera = cameraProvider.bindToLifecycle(
+        this, cameraSelector, preview, imageCapture, imageAnalyzer)
+
+      // Attach the viewfinder's surface provider to preview use case
+      preview?.setSurfaceProvider(view_finder.surfaceProvider)
+      observeCameraState(camera?.cameraInfo!!)
+    } catch (exc: Exception) {
+      Log.e(TAG, "Use case binding failed", exc)
+    }
+  }
+
+  private fun removeCameraStateObservers(cameraInfo: CameraInfo) {
+    cameraInfo.cameraState.removeObservers(this)
+  }
+
+  private fun observeCameraState(cameraInfo: CameraInfo) {
+    cameraInfo.cameraState.observe(this) { cameraState ->
+      run {
+        when (cameraState.type) {
+          CameraState.Type.PENDING_OPEN -> {
+            // Ask the user to close other camera apps
+            Toast.makeText(context,
+              "CameraState: Pending Open",
+              Toast.LENGTH_SHORT).show()
+          }
+          CameraState.Type.OPENING -> {
+            // Show the Camera UI
+            Toast.makeText(context,
+              "CameraState: Opening",
+              Toast.LENGTH_SHORT).show()
+          }
+          CameraState.Type.OPEN -> {
+            // Setup Camera resources and begin processing
+            Toast.makeText(context,
+              "CameraState: Open",
+              Toast.LENGTH_SHORT).show()
+          }
+          CameraState.Type.CLOSING -> {
+            // Close camera UI
+            Toast.makeText(context,
+              "CameraState: Closing",
+              Toast.LENGTH_SHORT).show()
+          }
+          CameraState.Type.CLOSED -> {
+            // Free camera resources
+            Toast.makeText(context,
+              "CameraState: Closed",
+              Toast.LENGTH_SHORT).show()
+          }
+        }
+      }
+
+      cameraState.error?.let { error ->
+        when (error.code) {
+          // Open errors
+          CameraState.ERROR_STREAM_CONFIG -> {
+            // Make sure to setup the use cases properly
+            Toast.makeText(context,
+              "Stream config error",
+              Toast.LENGTH_SHORT).show()
+          }
+          // Opening errors
+          CameraState.ERROR_CAMERA_IN_USE -> {
+            // Close the camera or ask user to close another camera app that's using the
+            // camera
+            Toast.makeText(context,
+              "Camera in use",
+              Toast.LENGTH_SHORT).show()
+          }
+          CameraState.ERROR_MAX_CAMERAS_IN_USE -> {
+            // Close another open camera in the app, or ask the user to close another
+            // camera app that's using the camera
+            Toast.makeText(context,
+              "Max cameras in use",
+              Toast.LENGTH_SHORT).show()
+          }
+          CameraState.ERROR_OTHER_RECOVERABLE_ERROR -> {
+            Toast.makeText(context,
+              "Other recoverable error",
+              Toast.LENGTH_SHORT).show()
+          }
+          // Closing errors
+          CameraState.ERROR_CAMERA_DISABLED -> {
+            // Ask the user to enable the device's cameras
+            Toast.makeText(context,
+              "Camera disabled",
+              Toast.LENGTH_SHORT).show()
+          }
+          CameraState.ERROR_CAMERA_FATAL_ERROR -> {
+            // Ask the user to reboot the device to restore camera function
+            Toast.makeText(context,
+              "Fatal error",
+              Toast.LENGTH_SHORT).show()
+          }
+          // Closed errors
+          CameraState.ERROR_DO_NOT_DISTURB_MODE_ENABLED -> {
+            // Ask the user to disable the "Do Not Disturb" mode, then reopen the camera
+            Toast.makeText(context,
+              "Do not disturb mode enabled",
+              Toast.LENGTH_SHORT).show()
+          }
+        }
+      }
+    }
+  }
+
+
+  private fun aspectRatio(width: Int, height: Int): Int {
+    val previewRatio = max(width, height).toDouble() / min(width, height)
+    if (abs(previewRatio - RATIO_4_3_VALUE) <= abs(previewRatio - RATIO_16_9_VALUE)) {
+      return AspectRatio.RATIO_4_3
+    }
+    return AspectRatio.RATIO_16_9
+  }
 
   private var mHolderCallback: SurfaceHolder.Callback? = null
 
-  private fun setupHolder() {
-    mHolder = mSurfaceview.holder
-    mHolderCallback = object : SurfaceHolder.Callback {
-      override fun surfaceChanged(
-        holder: SurfaceHolder,
-        format: Int,
-        width: Int,
-        height: Int
-      ) {
-        mSurfaceHolder = holder
-        mCamera?.apply {
-          startPreview()
-          cancelAutoFocus()
-          // 关键代码 该操作必须在开启预览之后进行（最后调用），
-          // 否则会黑屏，并提示该操作的下一步出错
-          // 只有执行该步骤后才可以使用MediaRecorder进行录制
-          // 否则会报 MediaRecorder(13280): start failed: -19
-          unlock()
-        }
-        cameraReleaseEnable = true
-      }
 
-      override fun surfaceDestroyed(holder: SurfaceHolder) {
-        handler.removeCallbacks(runnable)
-      }
-
-      override fun surfaceCreated(holder: SurfaceHolder) {
-        openCamera(holder)
-
-      }
-    }
-    mHolder.addCallback(mHolderCallback)
-  }
-
-  private fun openCamera(holder: SurfaceHolder) {
-    try {
-      mSurfaceHolder = holder
-      //使用后置摄像头
-      mCamera = Camera.open(getCurrentCameraId())
-      mCamera?.apply {
-        setDisplayOrientation(90)//旋转90度
-        setPreviewDisplay(holder)
-        val params = parameters
-        //注意此处需要根据摄像头获取最优像素，//如果不设置会按照系统默认配置最低160x120分辨率
-        val size = getPreviewSize()
-        params.apply {
-          setPictureSize(size.first, size.second)
-          jpegQuality = 100
-          pictureFormat = PixelFormat.JPEG
-          focusMode = Camera.Parameters.FOCUS_MODE_CONTINUOUS_PICTURE//1连续对焦
-        }
-        parameters = params
-      }
-    } catch (e: RuntimeException) {
-      //Camera.open() 在摄像头服务无法连接时可能会抛出 RuntimeException
-      e.printStackTrace()
-      finish()
-    }
-  }
-
-
-  // 获取当前摄像头 ID
-  fun getCurrentCameraId(): Int {
-    return cameraIds[currentCameraIndex]
-  }
-
-  // 切换摄像头
-  fun switchCamera() {
-    currentCameraIndex = (currentCameraIndex + 1) % cameraIds.size
-  }
 
   override fun onStop() {
     super.onStop()
@@ -538,5 +726,95 @@ class VideoRecordActivity : AppCompatActivity() {
     }
     Log.e(TAG, "最佳宽度 $bestPreviewWidth 最佳高度 $bestPreviewHeight")
     return Pair(bestPreviewWidth, bestPreviewHeight)
+  }
+
+  /**
+   * Our custom image analysis class.
+   *
+   * <p>All we need to do is override the function `analyze` with our desired operations. Here,
+   * we compute the average luminosity of the image by looking at the Y plane of the YUV frame.
+   */
+  private class LuminosityAnalyzer(listener: LumaListener? = null) : ImageAnalysis.Analyzer {
+    private val frameRateWindow = 8
+    private val frameTimestamps = ArrayDeque<Long>(5)
+    private val listeners = ArrayList<LumaListener>().apply { listener?.let { add(it) } }
+    private var lastAnalyzedTimestamp = 0L
+    var framesPerSecond: Double = -1.0
+      private set
+
+    /**
+     * Helper extension function used to extract a byte array from an image plane buffer
+     */
+    private fun ByteBuffer.toByteArray(): ByteArray {
+      rewind()    // Rewind the buffer to zero
+      val data = ByteArray(remaining())
+      get(data)   // Copy the buffer into a byte array
+      return data // Return the byte array
+    }
+
+    /**
+     * Analyzes an image to produce a result.
+     *
+     * <p>The caller is responsible for ensuring this analysis method can be executed quickly
+     * enough to prevent stalls in the image acquisition pipeline. Otherwise, newly available
+     * images will not be acquired and analyzed.
+     *
+     * <p>The image passed to this method becomes invalid after this method returns. The caller
+     * should not store external references to this image, as these references will become
+     * invalid.
+     *
+     * @param image image being analyzed VERY IMPORTANT: Analyzer method implementation must
+     * call image.close() on received images when finished using them. Otherwise, new images
+     * may not be received or the camera may stall, depending on back pressure setting.
+     *
+     */
+    override fun analyze(image: ImageProxy) {
+      // If there are no listeners attached, we don't need to perform analysis
+      if (listeners.isEmpty()) {
+        image.close()
+        return
+      }
+
+      // Keep track of frames analyzed
+      val currentTime = System.currentTimeMillis()
+      frameTimestamps.addFirst(currentTime)
+
+      // Compute the FPS using a moving average
+      while (frameTimestamps.size >= frameRateWindow) frameTimestamps.removeLast()
+      val timestampFirst = frameTimestamps.firstOrNull() ?: currentTime
+      val timestampLast = frameTimestamps.lastOrNull() ?: currentTime
+      framesPerSecond = 1.0 / ((timestampFirst - timestampLast) /
+          frameTimestamps.size.coerceAtLeast(1).toDouble()) * 1000.0
+
+      // Analysis could take an arbitrarily long amount of time
+      // Since we are running in a different thread, it won't stall other use cases
+
+      lastAnalyzedTimestamp = frameTimestamps.first()
+
+      // Since format in ImageAnalysis is YUV, image.planes[0] contains the luminance plane
+      val buffer = image.planes[0].buffer
+
+      // Extract image data from callback object
+      val data = buffer.toByteArray()
+
+      // Convert the data into an array of pixel values ranging 0-255
+      val pixels = data.map { it.toInt() and 0xFF }
+
+      // Compute average luminance for the image
+      val luma = pixels.average()
+
+      // Call all listeners with new value
+      listeners.forEach { it(luma) }
+
+      image.close()
+    }
+  }
+
+  companion object {
+    private const val TAG = "CameraXBasic"
+    private const val FILENAME = "yyyy-MM-dd-HH-mm-ss-SSS"
+    private const val PHOTO_TYPE = "image/jpeg"
+    private const val RATIO_4_3_VALUE = 4.0 / 3.0
+    private const val RATIO_16_9_VALUE = 16.0 / 9.0
   }
 }
