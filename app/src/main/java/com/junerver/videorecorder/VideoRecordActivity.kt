@@ -10,6 +10,7 @@ import android.graphics.BitmapFactory
 import android.graphics.Matrix
 import android.media.AudioManager
 import android.media.MediaPlayer
+import android.media.MediaRecorder
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -115,6 +116,10 @@ class VideoRecordActivity : AppCompatActivity() {
   private var videoCapture: VideoCapture<Recorder>? = null
   private var recording: Recording? = null
   private lateinit var recorder: Recorder
+
+  // MediaRecorder for VP8 encoding
+  private var mediaRecorder: MediaRecorder? = null
+  private var useMediaRecorder = false  // Flag to switch between CameraX and MediaRecorder
 
   //用于记录视频录制时长
   var handler = Handler(Looper.getMainLooper())
@@ -552,8 +557,12 @@ class VideoRecordActivity : AppCompatActivity() {
   override fun onDestroy() {
     super.onDestroy()
     // 停止录制（如果正在录制）
-    recording?.close()
-    recording = null
+    if (useMediaRecorder) {
+      releaseMediaRecorder()
+    } else {
+      recording?.close()
+      recording = null
+    }
 
     // 释放MediaPlayer
     if (this::mMediaPlayer.isInitialized) {
@@ -695,34 +704,153 @@ class VideoRecordActivity : AppCompatActivity() {
       handler.postDelayed(runnable, maxSec * 10L)
       startTime = System.currentTimeMillis()  //记录开始拍摄时间
 
-      // 使用CameraX Recorder录制视频
+      // 使用MediaRecorder with VP8 encoding for WebM format
+      useMediaRecorder = true
       val videoFile = MediaUtils.getOutputMediaFile(MediaUtils.MEDIA_TYPE_VIDEO)
       if (videoFile != null) {
-        path = videoFile.absolutePath
+        path = videoFile.absolutePath.replace(".mp4", ".webm")  // Change extension to webm
         Log.d(TAG, "视频文件路径: $path")
 
-        val outputOptions = FileOutputOptions.Builder(videoFile).build()
-
-        recording = recorder.prepareRecording(this, outputOptions)
-          .withAudioEnabled()
-          .start(ContextCompat.getMainExecutor(this)) { recordEvent ->
-            when (recordEvent) {
-              is VideoRecordEvent.Start -> {
-                Log.d(TAG, "录制开始")
-              }
-              is VideoRecordEvent.Finalize -> {
-                if (!recordEvent.hasError()) {
-                  Log.d(TAG, "录制完成: ${recordEvent.outputResults.outputUri}")
-                } else {
-                  Log.e(TAG, "录制出错: ${recordEvent.error}")
-                  recording?.close()
-                  recording = null
-                }
-              }
-            }
-          }
+        try {
+          setupMediaRecorder()
+          startMediaRecorder()
+        } catch (e: Exception) {
+          Log.e(TAG, "启动MediaRecorder失败: ${e.message}", e)
+          // Fallback to CameraX if MediaRecorder fails
+          useMediaRecorder = false
+          startCameraXRecording(videoFile)
+        }
+      } else {
+        // Fallback to CameraX if file creation fails
+        useMediaRecorder = false
+        val fallbackFile = MediaUtils.getOutputMediaFile(MediaUtils.MEDIA_TYPE_VIDEO)
+        if (fallbackFile != null) {
+          startCameraXRecording(fallbackFile)
+        }
       }
     }
+  }
+
+  // Setup MediaRecorder with VP8 encoder and WebM format
+  @SuppressLint("UnsafeOptInUsageError")
+  private fun setupMediaRecorder() {
+    val mr = MediaRecorder()
+    mediaRecorder = mr
+
+    // Get current display rotation for orientation
+    val rotation = try {
+      if (view_finder.display != null) {
+        view_finder.display.rotation
+      } else {
+        windowManager.defaultDisplay.rotation
+      }
+    } catch (e: Exception) {
+      Surface.ROTATION_0
+    }
+
+    Log.d(TAG, "Setting up MediaRecorder with rotation: $rotation")
+
+    // For WebM format, we use WEBM format
+    // Note: Not all devices support VP8 encoding, might need fallback
+    try {
+      mr.setVideoSource(MediaRecorder.VideoSource.SURFACE)
+    } catch (e: Exception) {
+      Log.w(TAG, "Video source SURFACE not available, trying CAMERA", e)
+      mr.setVideoSource(MediaRecorder.VideoSource.CAMERA)
+    }
+
+    mr.setAudioSource(MediaRecorder.AudioSource.MIC)
+
+    // Set output format to WebM
+    mr.setOutputFormat(MediaRecorder.OutputFormat.WEBM)
+
+    // Set video encoder to VP8
+    mr.setVideoEncoder(MediaRecorder.VideoEncoder.VP8)
+
+    // Set audio encoder to Opus (standard for WebM)
+    mr.setAudioEncoder(MediaRecorder.AudioEncoder.OPUS)
+
+    // Set video encoding bit rate
+    mr.setVideoEncodingBitRate(2000000)  // 2 Mbps
+
+    // Set video frame rate
+    mr.setVideoFrameRate(30)
+
+    // Get screen dimensions for video size
+    val metrics = windowManager.currentWindowMetrics.bounds
+    val videoWidth = min(metrics.width(), metrics.height())
+    val videoHeight = max(metrics.width(), metrics.height())
+    mr.setVideoSize(videoWidth, videoHeight)
+
+    // Set orientation hint based on device rotation
+    // For portrait recording, set appropriate rotation
+    val orientationHint = when (rotation) {
+      Surface.ROTATION_0 -> 90  // Portrait
+      Surface.ROTATION_90 -> 0  // Landscape
+      Surface.ROTATION_180 -> 270  // Portrait upside down
+      Surface.ROTATION_270 -> 180  // Landscape upside down
+      else -> 90
+    }
+    mr.setOrientationHint(orientationHint)
+    Log.d(TAG, "Orientation hint set to: $orientationHint degrees")
+
+    // Set output file
+    mr.setOutputFile(path)
+  }
+
+  // Start MediaRecorder recording
+  @SuppressLint("UnsafeOptInUsageError")
+  private fun startMediaRecorder() {
+    val mr = mediaRecorder ?: return
+
+    try {
+      mr.prepare()
+      mr.start()
+      Log.d(TAG, "MediaRecorder started successfully")
+    } catch (e: Exception) {
+      Log.e(TAG, "Failed to start MediaRecorder: ${e.message}", e)
+      releaseMediaRecorder()
+      throw e
+    }
+  }
+
+  // Fallback to CameraX recording
+  @RequiresPermission(Manifest.permission.RECORD_AUDIO)
+  private fun startCameraXRecording(videoFile: File) {
+    Log.d(TAG, "Falling back to CameraX recording")
+    val outputOptions = FileOutputOptions.Builder(videoFile).build()
+
+    recording = recorder.prepareRecording(this, outputOptions)
+      .withAudioEnabled()
+      .start(ContextCompat.getMainExecutor(this)) { recordEvent ->
+        when (recordEvent) {
+          is VideoRecordEvent.Start -> {
+            Log.d(TAG, "录制开始")
+          }
+          is VideoRecordEvent.Finalize -> {
+            if (!recordEvent.hasError()) {
+              Log.d(TAG, "录制完成: ${recordEvent.outputResults.outputUri}")
+            } else {
+              Log.e(TAG, "录制出错: ${recordEvent.error}")
+              recording?.close()
+              recording = null
+            }
+          }
+        }
+      }
+  }
+
+  // Release MediaRecorder resources
+  private fun releaseMediaRecorder() {
+    mediaRecorder?.apply {
+      try {
+        stop()
+        release()
+      } catch (e: Exception) {
+        Log.w(TAG, "Error releasing MediaRecorder", e)
+      }
+    }
+    mediaRecorder = null
   }
 
   //结束录制
@@ -743,9 +871,15 @@ class VideoRecordActivity : AppCompatActivity() {
       // 如果录制时间过短（小于1秒），转为拍照模式
       if (recordingDuration < 1000) {
         Log.d(TAG, "录制时间过短，转为拍照模式")
-        // 停止录制
-        recording?.stop()
-        recording = null
+
+        if (useMediaRecorder) {
+          // Stop MediaRecorder
+          releaseMediaRecorder()
+        } else {
+          // Stop CameraX recording
+          recording?.stop()
+          recording = null
+        }
 
         // 删除录制的视频文件
         val videoFile = File(path)
@@ -757,8 +891,14 @@ class VideoRecordActivity : AppCompatActivity() {
         takePicture()
       } else {
         // 正常停止录制
-        recording?.stop()
-        recording = null
+        if (useMediaRecorder) {
+          // Stop MediaRecorder
+          releaseMediaRecorder()
+        } else {
+          // Stop CameraX recording
+          recording?.stop()
+          recording = null
+        }
 
         // 延迟一点时间确保视频文件完全写入
         lifecycleScope.launch {
