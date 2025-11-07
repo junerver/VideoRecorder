@@ -134,7 +134,7 @@ class VideoRecordActivity : AppCompatActivity() {
     operatePanel.visibility = View.INVISIBLE
     playbackSurface.visibility = View.GONE
     thumbnailView.visibility = View.GONE
-    btnRecord.text = getString(R.string.main_record_button)
+    btnRecord.text = ""
 
     playbackSurface.holder.addCallback(object : SurfaceHolder.Callback {
       override fun surfaceCreated(holder: SurfaceHolder) {
@@ -246,9 +246,7 @@ class VideoRecordActivity : AppCompatActivity() {
     recordingStartTs = System.currentTimeMillis()
     progressBar.progress = 0
     progressBar.visibility = View.VISIBLE
-    statusText.visibility = View.VISIBLE
-    statusText.text = getString(R.string.recording_now)
-    btnRecord.text = getString(R.string.recording_now)
+    statusText.visibility = View.INVISIBLE
     uiHandler.post(progressRunnable)
   }
 
@@ -256,7 +254,6 @@ class VideoRecordActivity : AppCompatActivity() {
     uiHandler.removeCallbacks(progressRunnable)
     progressBar.visibility = View.INVISIBLE
     statusText.visibility = View.INVISIBLE
-    btnRecord.text = getString(R.string.main_record_button)
   }
 
   private fun capturePhotoFromPreview() {
@@ -352,7 +349,7 @@ class VideoRecordActivity : AppCompatActivity() {
     viewFinder.visibility = View.VISIBLE
     statusText.visibility = View.INVISIBLE
     progressBar.visibility = View.INVISIBLE
-    btnRecord.text = getString(R.string.main_record_button)
+    btnRecord.text = ""
     if (deleteFiles) {
       if (videoPath.isNotEmpty()) File(videoPath).delete()
       if (imagePath.isNotEmpty()) File(imagePath).delete()
@@ -454,6 +451,7 @@ private class Camera2Controller(
   private var currentCameraIndex = 0
   private val cameraIds = manager.cameraIdList
   private var surfaceTextureListener: TextureView.SurfaceTextureListener? = null
+  private var isActive = true
 
   var previewSize: Size = Size(1280, 720)
     private set
@@ -472,6 +470,7 @@ private class Camera2Controller(
     }
 
   fun start() {
+    isActive = true
     if (textureView.isAvailable) {
       openCamera()
     } else {
@@ -488,6 +487,8 @@ private class Camera2Controller(
   }
 
   fun shutdown() {
+    isActive = false
+    textureView.surfaceTextureListener = null
     stopRecordingSession()
     captureSession?.close()
     captureSession = null
@@ -497,6 +498,7 @@ private class Camera2Controller(
   }
 
   fun switchCamera() {
+    if (!isActive) return
     if (cameraIds.size <= 1) return
     currentCameraIndex = (currentCameraIndex + 1) % cameraIds.size
     stopRecordingSession()
@@ -508,11 +510,13 @@ private class Camera2Controller(
   }
 
   fun startRecordingSession(recordSurface: Surface) {
+    if (!isActive) return
     recordingSurface = recordSurface
     buildSession(listOfNotNull(previewSurface, recordingSurface))
   }
 
   fun stopRecordingSession() {
+    if (!isActive) return
     captureSession?.close()
     captureSession = null
     recordingSurface = null
@@ -520,6 +524,7 @@ private class Camera2Controller(
   }
 
   private fun openCamera() {
+    if (!isActive) return
     try {
       manager.openCamera(currentCameraId(), object : CameraDevice.StateCallback() {
         override fun onOpened(camera: CameraDevice) {
@@ -556,10 +561,15 @@ private class Camera2Controller(
   }
 
   private fun buildSession(targets: List<Surface>) {
+    if (!isActive) return
     val device = cameraDevice ?: return
     if (targets.isEmpty()) return
     device.createCaptureSession(targets, object : CameraCaptureSession.StateCallback() {
       override fun onConfigured(session: CameraCaptureSession) {
+        if (!isActive || cameraDevice == null) {
+          session.close()
+          return
+        }
         captureSession = session
         val requestBuilder = device.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
           set(CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_AUTO)
@@ -568,6 +578,7 @@ private class Camera2Controller(
         session.setRepeatingRequest(requestBuilder.build(), null, cameraHandler)
       }
       override fun onConfigureFailed(session: CameraCaptureSession) {
+        session.close()
         Toast.makeText(context, R.string.record_camera_unavailable, Toast.LENGTH_SHORT).show()
       }
     }, cameraHandler)
