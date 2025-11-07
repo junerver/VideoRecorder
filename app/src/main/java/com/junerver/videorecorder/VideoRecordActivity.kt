@@ -42,6 +42,7 @@ import java.nio.ByteBuffer
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import kotlin.math.abs
+import kotlinx.coroutines.*
 import me.zhanghai.android.materialprogressbar.MaterialProgressBar
 
 class VideoRecordActivity : AppCompatActivity() {
@@ -72,11 +73,17 @@ class VideoRecordActivity : AppCompatActivity() {
   private var playbackSurfaceReady = false
 
   private val uiHandler = Handler(Looper.getMainLooper())
+  private val coroutineScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
   private var touchStartTime = 0L
   private val longPressRunnable = Runnable { startVideoRecording() }
   private val progressRunnable = object : Runnable {
     override fun run() {
-      if (codecRecorder?.isRecording != true) return
+      // 检查是否正在录制或正在开始录制
+      if (codecRecorder?.isRecording != true && !isRecordingStarting) {
+        // 如果录制已停止且不是在开始过程中，停止进度更新
+        isRecordingStarting = false
+        return
+      }
       val elapsed = System.currentTimeMillis() - recordingStartTs
       val percent = (elapsed * 100 / MAX_DURATION_MS).toInt().coerceAtMost(100)
       progressBar.progress = percent
@@ -88,6 +95,7 @@ class VideoRecordActivity : AppCompatActivity() {
     }
   }
   private var recordingStartTs = 0L
+  private var isRecordingStarting = false // 跟踪录制是否正在开始过程中
 
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
@@ -100,6 +108,7 @@ class VideoRecordActivity : AppCompatActivity() {
   override fun onDestroy() {
     super.onDestroy()
     permissionsDisposable?.dispose()
+    coroutineScope.cancel()
     stopVideoRecording(force = true)
     stopPlayback()
     codecRecorder?.release()
@@ -209,36 +218,67 @@ class VideoRecordActivity : AppCompatActivity() {
       Toast.makeText(this, R.string.record_file_failed, Toast.LENGTH_SHORT).show()
       return
     }
+
     try {
-      codecRecorder = CodecRecorder(
-        option = requestedOption,
-        outputFile = outputFile,
-        orientationHint = controller.currentOrientationHint,
-        videoSize = controller.previewSize
-      )
-      val surface = codecRecorder!!.startRecording()
-      controller.startRecordingSession(surface)
-      videoPath = outputFile.absolutePath
-      captureState = CaptureState.PREVIEW
+      // 立即开始UI更新，给用户即时反馈
+      isRecordingStarting = true
       startRecordingUI()
+
+      // 在后台线程创建CodecRecorder
+      Thread {
+        try {
+          val recorder = CodecRecorder(
+            option = requestedOption,
+            outputFile = outputFile,
+            orientationHint = controller.currentOrientationHint,
+            videoSize = controller.previewSize
+          )
+          val surface = recorder.startRecording()
+
+          // 切换到主线程更新Camera session
+          runOnUiThread {
+            codecRecorder = recorder
+            controller.startRecordingSession(surface)
+            videoPath = outputFile.absolutePath
+            captureState = CaptureState.PREVIEW
+          }
+        } catch (e: Exception) {
+          runOnUiThread {
+            Toast.makeText(this, getString(R.string.record_start_failed, e.message), Toast.LENGTH_SHORT).show()
+            stopRecordingUI()
+            codecRecorder?.release()
+            codecRecorder = null
+            isRecordingStarting = false
+          }
+        }
+      }.start()
     } catch (e: Exception) {
       Toast.makeText(this, getString(R.string.record_start_failed, e.message), Toast.LENGTH_SHORT).show()
       codecRecorder?.release()
       codecRecorder = null
+      isRecordingStarting = false
+      stopRecordingUI()
     }
   }
 
   private fun stopVideoRecording(force: Boolean = false) {
     val recorder = codecRecorder ?: return
+    isRecordingStarting = false // 确保停止录制时重置状态
     stopRecordingUI()
     cameraController?.stopRecordingSession()
     codecRecorder = null
+
     if (force) {
       recorder.stopRecording()
       recorder.release()
       resetToPreview(deleteFiles = false)
       return
     }
+
+    // 立即切换到预览界面，提供即时UI响应
+    showVideoReviewFallback()
+
+    // 后台处理保存操作
     showSavingState(true)
     Thread {
       try {
@@ -249,7 +289,7 @@ class VideoRecordActivity : AppCompatActivity() {
       }
       runOnUiThread {
         showSavingState(false)
-        generateVideoThumbnail()
+        generateVideoThumbnailAsync()
       }
     }.start()
   }
@@ -258,14 +298,13 @@ class VideoRecordActivity : AppCompatActivity() {
     recordingStartTs = System.currentTimeMillis()
     progressBar.progress = 0
     progressBar.visibility = View.VISIBLE
-    statusText.visibility = View.INVISIBLE
     uiHandler.post(progressRunnable)
   }
 
   private fun stopRecordingUI() {
     uiHandler.removeCallbacks(progressRunnable)
     progressBar.visibility = View.INVISIBLE
-    statusText.visibility = View.INVISIBLE
+    isRecordingStarting = false
   }
 
   private fun capturePhotoFromPreview() {
@@ -327,6 +366,46 @@ class VideoRecordActivity : AppCompatActivity() {
       }
     }
     showVideoReviewFallback()
+  }
+
+  private fun generateVideoThumbnailAsync() {
+    if (videoPath.isEmpty()) return
+
+    coroutineScope.launch {
+      try {
+        // 在IO线程执行耗时操作
+        val bitmap = withContext(Dispatchers.IO) {
+          MediaUtils.getVideoFrameBitmap(videoPath)
+        }
+
+        bitmap?.let { bmp ->
+          // 在IO线程保存文件
+          val imageFile = withContext(Dispatchers.IO) {
+            val file = MediaUtils.getOutputMediaFile(MediaUtils.MEDIA_TYPE_IMAGE)
+            file?.let { f ->
+              try {
+                FileOutputStream(f).use { out ->
+                  bmp.compress(Bitmap.CompressFormat.JPEG, 85, out)
+                }
+                f.absolutePath
+              } catch (e: Exception) {
+                Log.e("VideoRecordActivity", "保存缩略图失败", e)
+                null
+              }
+            }
+          }
+
+          imageFile?.let { path ->
+            imagePath = path
+            // 在主线程更新UI
+            thumbnailView.setImageBitmap(bmp)
+            thumbnailView.visibility = View.VISIBLE
+          }
+        }
+      } catch (e: Exception) {
+        Log.e("VideoRecordActivity", "异步生成缩略图失败", e)
+      }
+    }
   }
 
   private fun showVideoReview(thumbnailPath: String) {
