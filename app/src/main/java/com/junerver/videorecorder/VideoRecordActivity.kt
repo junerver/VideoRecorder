@@ -45,6 +45,7 @@ import java.util.concurrent.TimeUnit
 import kotlin.math.abs
 import kotlinx.coroutines.*
 import me.zhanghai.android.materialprogressbar.MaterialProgressBar
+import com.junerver.videorecorder.gles.VideoEncoderCore
 
 class VideoRecordActivity : AppCompatActivity() {
 
@@ -608,7 +609,8 @@ class VideoRecordActivity : AppCompatActivity() {
 
     mediaPlayer = MediaPlayer().apply {
       try {
-        setDataSource(this@VideoRecordActivity, Uri.parse(videoPath))
+        // 修复：使用文件路径而不是URI
+        setDataSource(videoPath)
         setDisplay(playbackSurface.holder)
         setOnPreparedListener {
           Log.d("VideoRecordActivity", "视频准备完成，开始播放")
@@ -1042,12 +1044,36 @@ private class CodecRecorder(
   private var drainLatch: CountDownLatch? = null
   private var inputSurface: Surface? = null
   private var onRecordingComplete: (() -> Unit)? = null
+  private var videoEncoderCore: VideoEncoderCore? = null
 
   val isRecording: Boolean
     get() = drainThread != null
 
   fun startRecording(): Surface {
-    val format = MediaFormat.createVideoFormat(option.mime, videoSize.width, videoSize.height).apply {
+    val isWebM = option.containerFormat == MediaMuxer.OutputFormat.MUXER_OUTPUT_WEBM
+    val needsOpenGLRotation = isWebM && orientationHint != 0 && orientationHint != 180
+
+    val containerName = when(option.containerFormat) {
+      MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4 -> "MP4"
+      MediaMuxer.OutputFormat.MUXER_OUTPUT_WEBM -> "WebM"
+      else -> "Unknown"
+    }
+
+    Log.d("CodecRecorder", "==================== 开始录制 ====================")
+    Log.d("CodecRecorder", "容器格式: $containerName")
+    Log.d("CodecRecorder", "orientationHint: $orientationHint")
+    Log.d("CodecRecorder", "视频尺寸: ${videoSize.width}x${videoSize.height}")
+    Log.d("CodecRecorder", "isWebM: $isWebM")
+    Log.d("CodecRecorder", "需要OpenGL旋转: $needsOpenGLRotation")
+    Log.d("CodecRecorder", "=================================================")
+
+    // 关键修复：当旋转90或270度时，交换宽高
+    val encoderWidth = if (needsOpenGLRotation) videoSize.height else videoSize.width
+    val encoderHeight = if (needsOpenGLRotation) videoSize.width else videoSize.height
+
+    Log.d("CodecRecorder", "编码器输出尺寸: ${encoderWidth}x${encoderHeight}")
+
+    val format = MediaFormat.createVideoFormat(option.mime, encoderWidth, encoderHeight).apply {
       setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
       setInteger(MediaFormat.KEY_BIT_RATE, option.defaultBitrate)
       setInteger(MediaFormat.KEY_FRAME_RATE, option.defaultFrameRate)
@@ -1057,18 +1083,53 @@ private class CodecRecorder(
     inputSurface = codec.createInputSurface()
     codec.start()
 
-    // 关键修复：始终设置旋转提示
-    // MediaMuxer 在 API 24+ (Android 7.0) 已支持 MUXER_OUTPUT_WEBM (WebM) 的 setOrientationHint
-    try {
-      muxer.setOrientationHint(orientationHint)
-      Log.d("CodecRecorder", "容器格式 ${option.containerFormat}，已设置旋转提示为 $orientationHint")
-    } catch (e: Exception) {
-      Log.w("CodecRecorder", "设置旋转提示失败（忽略）", e)
+    // 为MP4设置旋转提示（MP4播放器支持良好）
+    // WebM通过OpenGL物理旋转，不依赖元数据
+    if (!isWebM) {
+      try {
+        muxer.setOrientationHint(orientationHint)
+        Log.d("CodecRecorder", "MP4容器，已设置旋转提示为 $orientationHint")
+      } catch (e: Exception) {
+        Log.w("CodecRecorder", "设置旋转提示失败（忽略）", e)
+      }
     }
 
     drainLatch = CountDownLatch(1)
     drainThread = Thread { drainEncoderLoop() }.apply { start() }
-    return inputSurface!!
+
+    // 关键：根据是否需要OpenGL旋转返回不同的Surface
+    return try {
+      if (needsOpenGLRotation) {
+        // WebM需要旋转：使用OpenGL渲染管道
+        Log.d("CodecRecorder", "✨ 开始创建OpenGL旋转管道...")
+        // 传递Camera输入尺寸，用于设置SurfaceTexture buffer和OpenGL viewport
+        videoEncoderCore = VideoEncoderCore(
+          inputSurface!!,
+          orientationHint,
+          videoSize.width,   // Camera输入宽度
+          videoSize.height   // Camera输入高度
+        )
+        Log.d("CodecRecorder", "VideoEncoderCore已创建（输入=${videoSize.width}x${videoSize.height}），准备初始化...")
+        videoEncoderCore!!.prepare()
+        Log.d("CodecRecorder", "VideoEncoderCore初始化完成，获取SurfaceTexture...")
+        val surfaceTexture = videoEncoderCore!!.getCameraSurfaceTexture()
+        Log.d("CodecRecorder", "SurfaceTexture已获取，创建Surface...")
+        val surface = Surface(surfaceTexture)
+        Log.d("CodecRecorder", "✅ OpenGL旋转管道创建成功")
+        surface
+      } else {
+        // MP4或不需要旋转：直接使用MediaCodec的Surface
+        Log.d("CodecRecorder", "使用直连模式（无OpenGL）")
+        inputSurface!!
+      }
+    } catch (e: Exception) {
+      Log.e("CodecRecorder", "❌ 创建录制Surface失败", e)
+      // 回退到直连模式
+      Log.w("CodecRecorder", "回退到直连模式")
+      videoEncoderCore?.release()
+      videoEncoderCore = null
+      inputSurface!!
+    }
   }
 
   fun stopRecording() {
@@ -1115,6 +1176,11 @@ private class CodecRecorder(
     } catch (_: Exception) {
     }
     codec.release()
+
+    // 释放OpenGL资源
+    videoEncoderCore?.release()
+    videoEncoderCore = null
+
     inputSurface?.release()
     inputSurface = null
   }
