@@ -57,30 +57,34 @@ class VideoEncoderCore(
                 textureRenderer = TextureRenderer()
                 textureRenderer!!.surfaceCreated()
 
-                // 根据测试结果（考虑镜像影响）：
-                // 不镜像时：orientationHint=90需要270度才能得到↑
-                // 镜像时：旋转和镜像的组合会产生不同效果，需要调整角度
-                val useMirror = true  // 启用镜像修复左右翻转
-                val actualRotation = if (useMirror) {
-                    // 启用镜像时的旋转角度
-                    when(rotation) {
-                        90 -> 90   // 尝试90度
-                        270 -> 270
-                        else -> rotation
+                // 根据测试结果：
+                // 后置摄像头（orientationHint=90）：需要镜像 + 90度旋转
+                // 前置摄像头（orientationHint=270）：不需要镜像 + 270度旋转
+                val useMirror: Boolean
+                val actualRotation: Int
+
+                when(rotation) {
+                    90 -> {
+                        // 后置摄像头：镜像 + 90度 = ↑ 正确 ✅
+                        useMirror = true
+                        actualRotation = 90
                     }
-                } else {
-                    // 不镜像时的旋转角度
-                    when(rotation) {
-                        90 -> 270
-                        270 -> 90
-                        else -> rotation
+                    270 -> {
+                        // 前置摄像头：尝试不镜像 + 90度
+                        // 前置摄像头可能需要与后置不同的处理
+                        useMirror = false
+                        actualRotation = 90
+                    }
+                    else -> {
+                        useMirror = false
+                        actualRotation = rotation
                     }
                 }
 
                 textureRenderer!!.setRotation(actualRotation)
                 textureRenderer!!.setMirrorHorizontal(useMirror)
 
-                Log.d(TAG, "orientationHint=$rotation, OpenGL旋转角度=$actualRotation（逆时针），水平镜像=$useMirror")
+                Log.d(TAG, "orientationHint=$rotation, 摄像头=${if (rotation == 90) "后置" else "前置"}, OpenGL旋转=$actualRotation°, 镜像=$useMirror")
 
                 // 创建SurfaceTexture用于接收Camera输出
                 val textureId = textureRenderer!!.getTextureId()

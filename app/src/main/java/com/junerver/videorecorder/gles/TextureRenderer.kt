@@ -95,45 +95,47 @@ class TextureRenderer {
      * 这是实现画面旋转的关键 - 通过重新排列纹理坐标来旋转内容
      */
     private fun updateTextureCoords() {
-        // 根据不同的旋转角度，重新排列纹理坐标顺序
-        textureCoords = when (rotation) {
-            0 -> floatArrayOf(
+        // 首先定义基础纹理坐标（先应用镜像）
+        val baseCoords = if (mirrorHorizontal) {
+            // 镜像后的基础坐标（u坐标翻转）
+            floatArrayOf(
+                1.0f, 0.0f,     // 右下（镜像）
+                0.0f, 0.0f,     // 左下（镜像）
+                1.0f, 1.0f,     // 右上（镜像）
+                0.0f, 1.0f      // 左上（镜像）
+            )
+        } else {
+            // 正常基础坐标
+            floatArrayOf(
                 0.0f, 0.0f,     // 左下
                 1.0f, 0.0f,     // 右下
                 0.0f, 1.0f,     // 左上
                 1.0f, 1.0f      // 右上
             )
-            90 -> floatArrayOf(
-                0.0f, 1.0f,     // 逆时针90度：左上 -> 左下
-                0.0f, 0.0f,     // 左下 -> 右下
-                1.0f, 1.0f,     // 右上 -> 左上
-                1.0f, 0.0f      // 右下 -> 右上
-            )
-            180 -> floatArrayOf(
-                1.0f, 1.0f,     // 旋转180度：右上 -> 左下
-                0.0f, 1.0f,     // 左上 -> 右下
-                1.0f, 0.0f,     // 右下 -> 左上
-                0.0f, 0.0f      // 左下 -> 右上
-            )
-            270 -> floatArrayOf(
-                1.0f, 0.0f,     // 逆时针270度（顺时针90度）：右下 -> 左下
-                1.0f, 1.0f,     // 右上 -> 右下
-                0.0f, 0.0f,     // 左下 -> 左上
-                0.0f, 1.0f      // 左上 -> 右上
-            )
-            else -> floatArrayOf(
-                0.0f, 0.0f,
-                1.0f, 0.0f,
-                0.0f, 1.0f,
-                1.0f, 1.0f
-            )
         }
 
-        // 如果需要水平镜像，翻转u坐标（x坐标）
-        if (mirrorHorizontal) {
-            for (i in textureCoords.indices step 2) {
-                textureCoords[i] = 1.0f - textureCoords[i]  // u坐标翻转
-            }
+        // 然后根据旋转角度重新排列（基于baseCoords）
+        textureCoords = when (rotation) {
+            0 -> baseCoords
+            90 -> floatArrayOf(
+                baseCoords[4], baseCoords[5],   // 左上 -> 左下
+                baseCoords[0], baseCoords[1],   // 左下 -> 右下
+                baseCoords[6], baseCoords[7],   // 右上 -> 左上
+                baseCoords[2], baseCoords[3]    // 右下 -> 右上
+            )
+            180 -> floatArrayOf(
+                baseCoords[6], baseCoords[7],   // 右上 -> 左下
+                baseCoords[4], baseCoords[5],   // 左上 -> 右下
+                baseCoords[2], baseCoords[3],   // 右下 -> 左上
+                baseCoords[0], baseCoords[1]    // 左下 -> 右上
+            )
+            270 -> floatArrayOf(
+                baseCoords[2], baseCoords[3],   // 右下 -> 左下
+                baseCoords[6], baseCoords[7],   // 右上 -> 右下
+                baseCoords[0], baseCoords[1],   // 左下 -> 左上
+                baseCoords[4], baseCoords[5]    // 左上 -> 右上
+            )
+            else -> baseCoords
         }
 
         // 更新buffer

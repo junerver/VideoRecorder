@@ -952,12 +952,29 @@ private class Camera2Controller(
           session.close()
           return
         }
+
+        // 关键修复：保存当前session引用
         captureSession = session
-        val requestBuilder = device.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
-          set(CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_AUTO)
-          targets.forEach { addTarget(it) }
+
+        try {
+          val requestBuilder = device.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
+            set(CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_AUTO)
+            targets.forEach { addTarget(it) }
+          }
+
+          // 再次检查session是否仍然有效（防止切换摄像头时的竞态条件）
+          if (captureSession == session && isActive) {
+            session.setRepeatingRequest(requestBuilder.build(), null, cameraHandler)
+          } else {
+            session.close()
+          }
+        } catch (e: IllegalStateException) {
+          // Session已关闭，忽略此错误（通常发生在快速切换摄像头时）
+          Log.w("Camera2Controller", "Session已关闭，忽略setRepeatingRequest", e)
+        } catch (e: Exception) {
+          Log.e("Camera2Controller", "配置预览请求失败", e)
+          session.close()
         }
-        session.setRepeatingRequest(requestBuilder.build(), null, cameraHandler)
       }
       override fun onConfigureFailed(session: CameraCaptureSession) {
         session.close()
