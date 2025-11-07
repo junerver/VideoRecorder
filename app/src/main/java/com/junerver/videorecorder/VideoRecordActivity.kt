@@ -232,14 +232,26 @@ class VideoRecordActivity : AppCompatActivity() {
     val recorder = codecRecorder ?: return
     stopRecordingUI()
     cameraController?.stopRecordingSession()
-    recorder.stopRecording()
-    recorder.release()
     codecRecorder = null
-    if (!force) {
-      generateVideoThumbnail()
-    } else {
+    if (force) {
+      recorder.stopRecording()
+      recorder.release()
       resetToPreview(deleteFiles = false)
+      return
     }
+    showSavingState(true)
+    Thread {
+      try {
+        recorder.stopRecording()
+      } catch (_: Exception) {
+      } finally {
+        recorder.release()
+      }
+      runOnUiThread {
+        showSavingState(false)
+        generateVideoThumbnail()
+      }
+    }.start()
   }
 
   private fun startRecordingUI() {
@@ -420,6 +432,15 @@ class VideoRecordActivity : AppCompatActivity() {
       }
       else -> Toast.makeText(this, R.string.record_nothing, Toast.LENGTH_SHORT).show()
     }
+  }
+
+  private fun showSavingState(show: Boolean) {
+    progressBar.isIndeterminate = show
+    progressBar.visibility = if (show) View.VISIBLE else View.INVISIBLE
+    btnRecord.isEnabled = !show
+    btnFlip.isEnabled = !show
+    btnCancel.isEnabled = !show
+    btnSubmit.isEnabled = !show
   }
 
   private enum class CaptureState {
