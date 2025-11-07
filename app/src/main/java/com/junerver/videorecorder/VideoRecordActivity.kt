@@ -395,6 +395,7 @@ class VideoRecordActivity : AppCompatActivity() {
     recordPanel.visibility = View.GONE
     operatePanel.visibility = View.VISIBLE
     btnPlay.visibility = View.INVISIBLE
+    btnFlip.visibility = View.INVISIBLE  // 拍照预览时隐藏切换摄像头按钮
     thumbnailView.visibility = View.VISIBLE
     playbackSurface.visibility = View.GONE
     viewFinder.visibility = View.INVISIBLE
@@ -530,6 +531,7 @@ class VideoRecordActivity : AppCompatActivity() {
     recordPanel.visibility = View.VISIBLE
     operatePanel.visibility = View.INVISIBLE
     btnPlay.visibility = View.INVISIBLE
+    btnFlip.visibility = View.VISIBLE  // 恢复切换摄像头按钮
     thumbnailView.visibility = View.GONE
     playbackSurface.visibility = View.GONE
     viewFinder.visibility = View.VISIBLE
