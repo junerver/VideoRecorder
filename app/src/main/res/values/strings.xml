@@ -1,3 +1,13 @@
 <resources>
     <string name="app_name">VideoRecorder</string>
+    <string name="encoder_picker_title">选择编码格式</string>
+    <string name="encoder_permission_rationale">授权%1$s编码所需的相机/录音/存储权限</string>
+    <string name="encoder_vp8_not_supported">设备不支持VP8，已回退到H264</string>
+    <string name="encoder_vp8_start_failed">VP8录制失败，已回退到H264</string>
+    <string name="encoder_vp8_file_error">无法创建WebM文件，已回退到H264</string>
+    <string name="encoder_vp8_camera_error">无法切换到旧版Camera，已回退到H264</string>
+    <string name="main_record_button">开始录制</string>
+    <string name="main_codec_default">正在获取设备支持的编码器…</string>
+    <string name="main_codec_header">已检测到的编码器（仅列出视频编码）</string>
+    <string name="main_codec_empty">未找到可用的视频编码器</string>
 </resources>

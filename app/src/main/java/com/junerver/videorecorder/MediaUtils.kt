@@ -35,24 +35,31 @@ object MediaUtils {
   /**
    * Create a file Uri for saving an image or video
    */
-  fun getOutputMediaFileUri(context: Context, type: Int): Uri {
+  fun getOutputMediaFileUri(
+    context: Context,
+    type: Int,
+    encoderOption: VideoEncoderOption = VideoEncoderOption.H264
+  ): Uri {
     val uri: Uri? = null
-    //适配Android N
+    // 适配 Android N
     return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
       FileProvider.getUriForFile(
         context,
         context.applicationContext.packageName + ".provider",
-        getOutputMediaFile(type)!!
+        getOutputMediaFile(type, encoderOption)!!
       )
     } else {
-      Uri.fromFile(getOutputMediaFile(type))
+      Uri.fromFile(getOutputMediaFile(type, encoderOption))
     }
   }
 
   /**
    * Create a File for saving an image or video
    */
-  fun getOutputMediaFile(type: Int): File? {
+  fun getOutputMediaFile(
+    type: Int,
+    encoderOption: VideoEncoderOption = VideoEncoderOption.H264
+  ): File? {
     require(type == MEDIA_TYPE_VIDEO || type == MEDIA_TYPE_IMAGE) {
       "错误的文件类型"
     }
@@ -69,7 +76,11 @@ object MediaUtils {
     val timeStamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.CHINA).format(Date())
     return when (type) {
       MEDIA_TYPE_IMAGE -> File(mediaStorageDir.path + File.separator + "IMG_" + timeStamp + ".jpg")
-      MEDIA_TYPE_VIDEO -> File(mediaStorageDir.path + File.separator + "VID_" + timeStamp + ".webm")
+      MEDIA_TYPE_VIDEO -> {
+        val extension = encoderOption.fileExtension
+        Log.d("MediaUtils", "Creating video file with extension: $extension (encoder=$encoderOption)")
+        File(mediaStorageDir.path + File.separator + "VID_" + timeStamp + ".$extension")
+      }
       else -> null
     }
   }
