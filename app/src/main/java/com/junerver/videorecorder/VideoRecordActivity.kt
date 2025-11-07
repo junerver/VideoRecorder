@@ -159,17 +159,23 @@ class VideoRecordActivity : AppCompatActivity() {
     btnRecord.setOnTouchListener { _, event ->
       when (event.action) {
         MotionEvent.ACTION_DOWN -> {
+          Log.d("VideoRecordActivity", "手指按下")
           touchStartTime = System.currentTimeMillis()
           uiHandler.postDelayed(longPressRunnable, LONG_PRESS_THRESHOLD_MS)
+          Log.d("VideoRecordActivity", "安排延迟${LONG_PRESS_THRESHOLD_MS}ms后开始录制")
           true
         }
         MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+          Log.d("VideoRecordActivity", "手指抬起")
           uiHandler.removeCallbacks(longPressRunnable)
           if (codecRecorder?.isRecording == true) {
+            Log.d("VideoRecordActivity", "停止录制")
             stopVideoRecording()
           } else {
             val tapDuration = System.currentTimeMillis() - touchStartTime
+            Log.d("VideoRecordActivity", "点击时长: ${tapDuration}ms")
             if (tapDuration < LONG_PRESS_THRESHOLD_MS) {
+              Log.d("VideoRecordActivity", "执行拍照")
               capturePhotoFromPreview()
             }
           }
@@ -208,17 +214,27 @@ class VideoRecordActivity : AppCompatActivity() {
   }
 
   private fun startVideoRecording() {
-    if (codecRecorder?.isRecording == true) return
+    Log.d("VideoRecordActivity", "开始录制被调用")
+    if (codecRecorder?.isRecording == true) {
+      Log.d("VideoRecordActivity", "录制已在进行中，返回")
+      return
+    }
     if (!requestedOption.isUsableOnDevice()) {
+      Log.d("VideoRecordActivity", "编码器不可用: ${requestedOption}")
       Toast.makeText(this, R.string.main_codec_empty, Toast.LENGTH_SHORT).show()
       return
     }
-    val controller = cameraController ?: return
+    val controller = cameraController ?: run {
+      Log.d("VideoRecordActivity", "Camera控制器为空")
+      return
+    }
     val outputFile = MediaUtils.getOutputMediaFile(MediaUtils.MEDIA_TYPE_VIDEO, requestedOption) ?: run {
+      Log.d("VideoRecordActivity", "无法创建输出文件")
       Toast.makeText(this, R.string.record_file_failed, Toast.LENGTH_SHORT).show()
       return
     }
 
+    Log.d("VideoRecordActivity", "开始录制，文件: ${outputFile.absolutePath}")
     try {
       // 立即开始UI更新，给用户即时反馈
       isRecordingStarting = true
@@ -227,22 +243,28 @@ class VideoRecordActivity : AppCompatActivity() {
       // 在后台线程创建CodecRecorder
       Thread {
         try {
+          Log.d("VideoRecordActivity", "后台线程开始创建CodecRecorder")
           val recorder = CodecRecorder(
             option = requestedOption,
             outputFile = outputFile,
             orientationHint = controller.currentOrientationHint,
             videoSize = controller.previewSize
           )
+          Log.d("VideoRecordActivity", "CodecRecorder创建成功，开始录制")
           val surface = recorder.startRecording()
+          Log.d("VideoRecordActivity", "录制开始，surface: $surface")
 
           // 切换到主线程更新Camera session
           runOnUiThread {
+            Log.d("VideoRecordActivity", "切换到主线程设置CodecRecorder")
             codecRecorder = recorder
             controller.startRecordingSession(surface)
             videoPath = outputFile.absolutePath
             captureState = CaptureState.PREVIEW
+            Log.d("VideoRecordActivity", "录制设置完成")
           }
         } catch (e: Exception) {
+          Log.e("VideoRecordActivity", "录制启动失败", e)
           runOnUiThread {
             Toast.makeText(this, getString(R.string.record_start_failed, e.message), Toast.LENGTH_SHORT).show()
             stopRecordingUI()
@@ -295,10 +317,12 @@ class VideoRecordActivity : AppCompatActivity() {
   }
 
   private fun startRecordingUI() {
+    Log.d("VideoRecordActivity", "开始录制UI")
     recordingStartTs = System.currentTimeMillis()
     progressBar.progress = 0
     progressBar.visibility = View.VISIBLE
     uiHandler.post(progressRunnable)
+    Log.d("VideoRecordActivity", "录制UI设置完成，进度条可见")
   }
 
   private fun stopRecordingUI() {
@@ -531,7 +555,7 @@ class VideoRecordActivity : AppCompatActivity() {
     const val TYPE_VIDEO = 0
     const val TYPE_IMAGE = 1
     private const val MAX_DURATION_MS = 10_000L
-    private const val LONG_PRESS_THRESHOLD_MS = 300L
+    private const val LONG_PRESS_THRESHOLD_MS = 100L
     private const val PROGRESS_INTERVAL_MS = 100L
   }
 }
