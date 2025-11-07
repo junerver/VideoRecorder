@@ -1068,7 +1068,12 @@ private class CodecRecorder(
 
   fun startRecording(): Surface {
     val isWebM = option.containerFormat == MediaMuxer.OutputFormat.MUXER_OUTPUT_WEBM
-    val needsOpenGLRotation = isWebM && orientationHint != 0 && orientationHint != 180
+    val isFrontCamera = orientationHint == 270  // 前置摄像头
+
+    // 扩展OpenGL管道使用条件：
+    // 1. WebM需要旋转（原有逻辑）
+    // 2. 前置摄像头（修复镜像问题）
+    val needsOpenGL = isFrontCamera || (isWebM && orientationHint != 0 && orientationHint != 180)
 
     val containerName = when(option.containerFormat) {
       MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4 -> "MP4"
@@ -1080,13 +1085,13 @@ private class CodecRecorder(
     Log.d("CodecRecorder", "容器格式: $containerName")
     Log.d("CodecRecorder", "orientationHint: $orientationHint")
     Log.d("CodecRecorder", "视频尺寸: ${videoSize.width}x${videoSize.height}")
-    Log.d("CodecRecorder", "isWebM: $isWebM")
-    Log.d("CodecRecorder", "需要OpenGL旋转: $needsOpenGLRotation")
+    Log.d("CodecRecorder", "摄像头类型: ${if (isFrontCamera) "前置" else "后置"}")
+    Log.d("CodecRecorder", "需要OpenGL管道: $needsOpenGL")
     Log.d("CodecRecorder", "=================================================")
 
-    // 关键修复：当旋转90或270度时，交换宽高
-    val encoderWidth = if (needsOpenGLRotation) videoSize.height else videoSize.width
-    val encoderHeight = if (needsOpenGLRotation) videoSize.width else videoSize.height
+    // 关键修复：使用OpenGL时需要交换宽高（因为旋转90度）
+    val encoderWidth = if (needsOpenGL) videoSize.height else videoSize.width
+    val encoderHeight = if (needsOpenGL) videoSize.width else videoSize.height
 
     Log.d("CodecRecorder", "编码器输出尺寸: ${encoderWidth}x${encoderHeight}")
 
@@ -1100,12 +1105,12 @@ private class CodecRecorder(
     inputSurface = codec.createInputSurface()
     codec.start()
 
-    // 为MP4设置旋转提示（MP4播放器支持良好）
-    // WebM通过OpenGL物理旋转，不依赖元数据
-    if (!isWebM) {
+    // 为MP4设置旋转提示（仅后置摄像头，MP4播放器支持良好）
+    // 前置摄像头和WebM都通过OpenGL物理旋转，不依赖元数据
+    if (!needsOpenGL && !isWebM) {
       try {
         muxer.setOrientationHint(orientationHint)
-        Log.d("CodecRecorder", "MP4容器，已设置旋转提示为 $orientationHint")
+        Log.d("CodecRecorder", "MP4容器（后置摄像头），已设置旋转提示为 $orientationHint")
       } catch (e: Exception) {
         Log.w("CodecRecorder", "设置旋转提示失败（忽略）", e)
       }
@@ -1114,11 +1119,11 @@ private class CodecRecorder(
     drainLatch = CountDownLatch(1)
     drainThread = Thread { drainEncoderLoop() }.apply { start() }
 
-    // 关键：根据是否需要OpenGL旋转返回不同的Surface
+    // 关键：根据是否需要OpenGL管道返回不同的Surface
     return try {
-      if (needsOpenGLRotation) {
-        // WebM需要旋转：使用OpenGL渲染管道
-        Log.d("CodecRecorder", "✨ 开始创建OpenGL旋转管道...")
+      if (needsOpenGL) {
+        // 需要OpenGL管道（WebM旋转或前置摄像头镜像修复）
+        Log.d("CodecRecorder", "✨ 开始创建OpenGL渲染管道（旋转+镜像修复）...")
         // 传递Camera输入尺寸，用于设置SurfaceTexture buffer和OpenGL viewport
         videoEncoderCore = VideoEncoderCore(
           inputSurface!!,
@@ -1132,10 +1137,10 @@ private class CodecRecorder(
         val surfaceTexture = videoEncoderCore!!.getCameraSurfaceTexture()
         Log.d("CodecRecorder", "SurfaceTexture已获取，创建Surface...")
         val surface = Surface(surfaceTexture)
-        Log.d("CodecRecorder", "✅ OpenGL旋转管道创建成功")
+        Log.d("CodecRecorder", "✅ OpenGL渲染管道创建成功")
         surface
       } else {
-        // MP4或不需要旋转：直接使用MediaCodec的Surface
+        // 后置摄像头MP4：直接使用MediaCodec的Surface
         Log.d("CodecRecorder", "使用直连模式（无OpenGL）")
         inputSurface!!
       }
