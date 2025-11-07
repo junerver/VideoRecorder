@@ -159,23 +159,17 @@ class VideoRecordActivity : AppCompatActivity() {
     btnRecord.setOnTouchListener { _, event ->
       when (event.action) {
         MotionEvent.ACTION_DOWN -> {
-          Log.d("VideoRecordActivity", "手指按下")
           touchStartTime = System.currentTimeMillis()
           uiHandler.postDelayed(longPressRunnable, LONG_PRESS_THRESHOLD_MS)
-          Log.d("VideoRecordActivity", "安排延迟${LONG_PRESS_THRESHOLD_MS}ms后开始录制")
           true
         }
         MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-          Log.d("VideoRecordActivity", "手指抬起")
           uiHandler.removeCallbacks(longPressRunnable)
           if (codecRecorder?.isRecording == true) {
-            Log.d("VideoRecordActivity", "停止录制")
             stopVideoRecording()
           } else {
             val tapDuration = System.currentTimeMillis() - touchStartTime
-            Log.d("VideoRecordActivity", "点击时长: ${tapDuration}ms")
             if (tapDuration < LONG_PRESS_THRESHOLD_MS) {
-              Log.d("VideoRecordActivity", "执行拍照")
               capturePhotoFromPreview()
             }
           }
@@ -194,7 +188,10 @@ class VideoRecordActivity : AppCompatActivity() {
       }
     }
     btnCancel.setOnClickListener { resetToPreview(deleteFiles = true) }
-    btnSubmit.setOnClickListener { finishWithResult() }
+    btnSubmit.setOnClickListener {
+      Log.d("VideoRecordActivity", "确认按钮被点击")
+      finishWithResult()
+    }
   }
 
   private fun ensurePermissions() {
@@ -214,27 +211,17 @@ class VideoRecordActivity : AppCompatActivity() {
   }
 
   private fun startVideoRecording() {
-    Log.d("VideoRecordActivity", "开始录制被调用")
-    if (codecRecorder?.isRecording == true) {
-      Log.d("VideoRecordActivity", "录制已在进行中，返回")
-      return
-    }
+    if (codecRecorder?.isRecording == true) return
     if (!requestedOption.isUsableOnDevice()) {
-      Log.d("VideoRecordActivity", "编码器不可用: ${requestedOption}")
       Toast.makeText(this, R.string.main_codec_empty, Toast.LENGTH_SHORT).show()
       return
     }
-    val controller = cameraController ?: run {
-      Log.d("VideoRecordActivity", "Camera控制器为空")
-      return
-    }
+    val controller = cameraController ?: return
     val outputFile = MediaUtils.getOutputMediaFile(MediaUtils.MEDIA_TYPE_VIDEO, requestedOption) ?: run {
-      Log.d("VideoRecordActivity", "无法创建输出文件")
       Toast.makeText(this, R.string.record_file_failed, Toast.LENGTH_SHORT).show()
       return
     }
 
-    Log.d("VideoRecordActivity", "开始录制，文件: ${outputFile.absolutePath}")
     try {
       // 立即开始UI更新，给用户即时反馈
       isRecordingStarting = true
@@ -243,28 +230,25 @@ class VideoRecordActivity : AppCompatActivity() {
       // 在后台线程创建CodecRecorder
       Thread {
         try {
-          Log.d("VideoRecordActivity", "后台线程开始创建CodecRecorder")
           val recorder = CodecRecorder(
             option = requestedOption,
             outputFile = outputFile,
             orientationHint = controller.currentOrientationHint,
             videoSize = controller.previewSize
           )
-          Log.d("VideoRecordActivity", "CodecRecorder创建成功，开始录制")
           val surface = recorder.startRecording()
-          Log.d("VideoRecordActivity", "录制开始，surface: $surface")
 
           // 切换到主线程更新Camera session
           runOnUiThread {
-            Log.d("VideoRecordActivity", "切换到主线程设置CodecRecorder")
             codecRecorder = recorder
             controller.startRecordingSession(surface)
             videoPath = outputFile.absolutePath
             captureState = CaptureState.PREVIEW
-            Log.d("VideoRecordActivity", "录制设置完成")
+
+            // 立即捕获并保存首帧缩略图
+            captureInitialThumbnail()
           }
         } catch (e: Exception) {
-          Log.e("VideoRecordActivity", "录制启动失败", e)
           runOnUiThread {
             Toast.makeText(this, getString(R.string.record_start_failed, e.message), Toast.LENGTH_SHORT).show()
             stopRecordingUI()
@@ -300,29 +284,82 @@ class VideoRecordActivity : AppCompatActivity() {
     // 立即切换到预览界面，提供即时UI响应
     showVideoReviewFallback()
 
-    // 后台处理保存操作
-    showSavingState(true)
-    Thread {
-      try {
-        recorder.stopRecording()
-      } catch (_: Exception) {
-      } finally {
+    // 优化：立即显示UI，但延迟启用播放按钮直到文件真正可用
+    showSavingState(false)  // 立即隐藏保存状态
+    // 不立即启用播放按钮，等待后台操作完成
+    btnPlay.visibility = View.INVISIBLE  // 初始隐藏播放按钮
+    Log.d("VideoRecordActivity", "立即显示UI，等待后台保存操作完成后启用播放按钮")
+
+    // 调试信息：检查各个View的状态
+    Log.d("VideoRecordActivity", "View状态检查:")
+    Log.d("VideoRecordActivity", "  operatePanel.visibility: ${operatePanel.visibility}")
+    Log.d("VideoRecordActivity", "  btnSubmit.visibility: ${btnSubmit.visibility}")
+    Log.d("VideoRecordActivity", "  btnSubmit.isEnabled: ${btnSubmit.isEnabled}")
+    Log.d("VideoRecordActivity", "  btnCancel.visibility: ${btnCancel.visibility}")
+    Log.d("VideoRecordActivity", "  progressBar.visibility: ${progressBar.visibility}")
+    Log.d("VideoRecordActivity", "  playbackSurface.visibility: ${playbackSurface.visibility}")
+
+    // 优化：使用事件驱动的回调机制，而不是固定等待
+    val startTime = System.currentTimeMillis()
+    Log.d("VideoRecordActivity", "开始设置编码器完成回调，startTime=$startTime")
+
+    try {
+      recorder.setOnRecordingComplete {
+        val callbackTime = System.currentTimeMillis()
+        Log.d("VideoRecordActivity", "✅ 编码器完成回调被触发！callbackTime=$callbackTime, 总耗时=${callbackTime - startTime}ms")
+        Log.d("VideoRecordActivity", "回调线程: ${Thread.currentThread().name}")
+
+      Thread {
+        Log.d("VideoRecordActivity", "🚀 异步Thread开始执行，线程: ${Thread.currentThread().name}")
+        val releaseStartTime = System.currentTimeMillis()
+        Log.d("VideoRecordActivity", "开始执行recorder.release()，releaseStartTime=$releaseStartTime")
+
         recorder.release()
+
+        val releaseEndTime = System.currentTimeMillis()
+        val releaseDuration = releaseEndTime - releaseStartTime
+        val totalDuration = releaseEndTime - startTime
+        Log.d("VideoRecordActivity", "recorder.release()完成，耗时=${releaseDuration}ms")
+        Log.d("VideoRecordActivity", "编码器异步处理完全完成，总耗时=${totalDuration}ms")
+
+        // 检查文件状态
+        val videoFile = File(videoPath)
+        if (videoFile.exists()) {
+          Log.d("VideoRecordActivity", "文件状态检查: 存在=true, 大小=${videoFile.length()}bytes")
+        } else {
+          Log.w("VideoRecordActivity", "文件状态检查: 存在=false")
+        }
+
+        Log.d("VideoRecordActivity", "准备在UI线程显示播放按钮")
+        // 在编码器真正完成后，再启用播放按钮
+        runOnUiThread {
+          Log.d("VideoRecordActivity", "🎯 UI线程执行中，准备显示播放按钮，当前线程: ${Thread.currentThread().name}")
+          btnPlay.visibility = View.VISIBLE
+          Log.d("VideoRecordActivity", "✅ 播放按钮已启用！总耗时=${totalDuration}ms，btnPlay.visibility=${btnPlay.visibility}")
+        }
+        Log.d("VideoRecordActivity", "runOnUiThread调用完成")
+      }.apply {
+        Log.d("VideoRecordActivity", "异步Thread已创建并启动")
+        start()
       }
-      runOnUiThread {
-        showSavingState(false)
-        generateVideoThumbnailAsync()
-      }
-    }.start()
+      Log.d("VideoRecordActivity", "setOnRecordingComplete回调处理完成")
+    }
+    Log.d("VideoRecordActivity", "✅ 编码器完成回调设置成功")
+    } catch (e: Exception) {
+      Log.e("VideoRecordActivity", "❌ 设置编码器完成回调失败", e)
+    }
+
+    // 只发送停止信号，不阻塞等待
+    Log.d("VideoRecordActivity", "准备调用recorder.stopRecording()，等待编码器完成回调...")
+    recorder.stopRecording()
+    Log.d("VideoRecordActivity", "recorder.stopRecording()调用完成，现在等待编码器回调...")
   }
 
   private fun startRecordingUI() {
-    Log.d("VideoRecordActivity", "开始录制UI")
     recordingStartTs = System.currentTimeMillis()
     progressBar.progress = 0
     progressBar.visibility = View.VISIBLE
     uiHandler.post(progressRunnable)
-    Log.d("VideoRecordActivity", "录制UI设置完成，进度条可见")
   }
 
   private fun stopRecordingUI() {
@@ -392,46 +429,47 @@ class VideoRecordActivity : AppCompatActivity() {
     showVideoReviewFallback()
   }
 
-  private fun generateVideoThumbnailAsync() {
-    if (videoPath.isEmpty()) return
+  private fun captureInitialThumbnail() {
+    // 从Camera预览捕获当前帧作为缩略图
+    val bitmap = viewFinder.bitmap
+    if (bitmap != null) {
+      Thread {
+        try {
+          val imageFile = MediaUtils.getOutputMediaFile(MediaUtils.MEDIA_TYPE_IMAGE)
+          if (imageFile != null) {
+            // 统一缩略图尺寸，避免缩放问题
+            val targetSize = 480 // 统一的最大边长
+            val scale = if (bitmap.width > bitmap.height) {
+              targetSize.toFloat() / bitmap.width
+            } else {
+              targetSize.toFloat() / bitmap.height
+            }
+            val newWidth = (bitmap.width * scale).toInt()
+            val newHeight = (bitmap.height * scale).toInt()
 
-    coroutineScope.launch {
-      try {
-        // 在IO线程执行耗时操作
-        val bitmap = withContext(Dispatchers.IO) {
-          MediaUtils.getVideoFrameBitmap(videoPath)
-        }
+            val scaledBitmap = Bitmap.createScaledBitmap(bitmap, newWidth, newHeight, true)
 
-        bitmap?.let { bmp ->
-          // 在IO线程保存文件
-          val imageFile = withContext(Dispatchers.IO) {
-            val file = MediaUtils.getOutputMediaFile(MediaUtils.MEDIA_TYPE_IMAGE)
-            file?.let { f ->
-              try {
-                FileOutputStream(f).use { out ->
-                  bmp.compress(Bitmap.CompressFormat.JPEG, 85, out)
-                }
-                f.absolutePath
-              } catch (e: Exception) {
-                Log.e("VideoRecordActivity", "保存缩略图失败", e)
-                null
+            FileOutputStream(imageFile).use { out ->
+              scaledBitmap.compress(Bitmap.CompressFormat.JPEG, 85, out)
+            }
+            imagePath = imageFile.absolutePath
+
+            // 在主线程更新预览显示
+            runOnUiThread {
+              if (captureState == CaptureState.VIDEO_REVIEW) {
+                thumbnailView.setImageBitmap(scaledBitmap)
+                thumbnailView.visibility = View.VISIBLE
               }
             }
           }
-
-          imageFile?.let { path ->
-            imagePath = path
-            // 在主线程更新UI
-            thumbnailView.setImageBitmap(bmp)
-            thumbnailView.visibility = View.VISIBLE
-          }
+        } catch (e: Exception) {
+          Log.e("VideoRecordActivity", "保存初始缩略图失败", e)
         }
-      } catch (e: Exception) {
-        Log.e("VideoRecordActivity", "异步生成缩略图失败", e)
-      }
+      }.start()
     }
   }
 
+  
   private fun showVideoReview(thumbnailPath: String) {
     captureState = CaptureState.VIDEO_REVIEW
     recordPanel.visibility = View.GONE
@@ -447,10 +485,41 @@ class VideoRecordActivity : AppCompatActivity() {
     captureState = CaptureState.VIDEO_REVIEW
     recordPanel.visibility = View.GONE
     operatePanel.visibility = View.VISIBLE
-    btnPlay.visibility = View.VISIBLE
-    thumbnailView.visibility = View.GONE
-    playbackSurface.visibility = View.GONE
+    // 初始隐藏播放按钮，等待后台保存操作完成
+    btnPlay.visibility = View.INVISIBLE
+    btnFlip.visibility = View.INVISIBLE
+
+    // 关键修复：保持viewFinder可见但透明，这样不会触发surface重建
+    // 同时通过设置clickable=false避免拦截触摸事件
     viewFinder.visibility = View.INVISIBLE
+    viewFinder.isClickable = false
+
+    // 确保playbackSurface已经准备好（它应该在初始化时就设置了回调）
+    // 如果surface还没准备好，设置为可见让它创建
+    if (!playbackSurfaceReady) {
+      Log.d("VideoRecordActivity", "playbackSurface未准备好，设置为可见让其创建")
+      playbackSurface.visibility = View.VISIBLE
+      // 稍等一下让surface创建完成
+      uiHandler.postDelayed({
+        Log.d("VideoRecordActivity", "等待surface创建完成，playbackSurfaceReady=$playbackSurfaceReady")
+      }, 200)
+    }
+
+    // 如果已经有预先保存的缩略图，立即显示
+    if (imagePath.isNotEmpty()) {
+      val bitmap = BitmapFactory.decodeFile(imagePath)
+      if (bitmap != null) {
+        thumbnailView.setImageBitmap(bitmap)
+        thumbnailView.visibility = View.VISIBLE
+        Log.d("VideoRecordActivity", "显示预先保存的缩略图: $imagePath")
+      } else {
+        thumbnailView.visibility = View.GONE
+      }
+    } else {
+      thumbnailView.visibility = View.GONE
+    }
+
+    Log.d("VideoRecordActivity", "showVideoReviewFallback完成，确保playbackSurfaceReady=$playbackSurfaceReady")
   }
 
   private fun resetToPreview(deleteFiles: Boolean) {
@@ -474,24 +543,100 @@ class VideoRecordActivity : AppCompatActivity() {
   }
 
   private fun playRecordedVideo() {
-    if (!playbackSurfaceReady || videoPath.isEmpty()) return
+    Log.d("VideoRecordActivity", "播放按钮被点击")
+    Log.d("VideoRecordActivity", "playbackSurfaceReady: $playbackSurfaceReady")
+    Log.d("VideoRecordActivity", "videoPath: $videoPath")
+
+    if (videoPath.isEmpty()) {
+      Log.w("VideoRecordActivity", "视频文件路径为空")
+      Toast.makeText(this, "视频文件不存在", Toast.LENGTH_SHORT).show()
+      return
+    }
+
+    // 检查视频文件是否存在且可读
+    val videoFile = File(videoPath)
+    if (!videoFile.exists()) {
+      Log.w("VideoRecordActivity", "视频文件不存在: $videoPath")
+      Toast.makeText(this, "视频文件不存在", Toast.LENGTH_SHORT).show()
+      return
+    }
+
+    if (!videoFile.canRead()) {
+      Log.w("VideoRecordActivity", "视频文件不可读: $videoPath")
+      Toast.makeText(this, "视频文件不可读", Toast.LENGTH_SHORT).show()
+      return
+    }
+
+    // 检查文件大小，如果太小可能还在写入
+    val fileSize = videoFile.length()
+    Log.d("VideoRecordActivity", "视频文件大小: ${fileSize} bytes")
+    if (fileSize < 1024) { // 小于1KB可能文件不完整
+      Log.w("VideoRecordActivity", "视频文件太小，可能还在写入中: ${fileSize} bytes")
+      Toast.makeText(this, "视频正在处理中，请稍后再试", Toast.LENGTH_SHORT).show()
+      // 延迟500ms后重试
+      uiHandler.postDelayed({
+        playRecordedVideo()
+      }, 500)
+      return
+    }
+
+    // 如果Surface还没准备好，强制设置playbackSurface可见并等待
+    if (!playbackSurfaceReady) {
+      Log.w("VideoRecordActivity", "播放Surface未准备好，强制设置为可见并等待...")
+      playbackSurface.visibility = View.VISIBLE
+
+      // 等待更长时间让surface创建
+      uiHandler.postDelayed({
+        if (playbackSurfaceReady) {
+          Log.d("VideoRecordActivity", "Surface已准备好，继续播放")
+          playRecordedVideo() // 递归调用重新播放
+        } else {
+          Log.e("VideoRecordActivity", "Surface创建超时，无法播放")
+          Toast.makeText(this, "播放器初始化失败，请重试", Toast.LENGTH_SHORT).show()
+        }
+      }, 500)
+      return
+    }
+
+    Log.d("VideoRecordActivity", "开始播放视频: $videoPath")
     stopPlayback()
     playbackSurface.visibility = View.VISIBLE
     thumbnailView.visibility = View.GONE
+    // 播放时隐藏播放按钮
+    btnPlay.visibility = View.GONE
+
     mediaPlayer = MediaPlayer().apply {
-      setDataSource(this@VideoRecordActivity, Uri.parse(videoPath))
-      setDisplay(playbackSurface.holder)
-      setOnPreparedListener { start() }
-      setOnCompletionListener {
+      try {
+        setDataSource(this@VideoRecordActivity, Uri.parse(videoPath))
+        setDisplay(playbackSurface.holder)
+        setOnPreparedListener {
+          Log.d("VideoRecordActivity", "视频准备完成，开始播放")
+          start()
+        }
+        setOnCompletionListener {
+          Log.d("VideoRecordActivity", "视频播放完成")
+          stopPlayback()
+          thumbnailView.visibility = View.VISIBLE
+          // 播放完成后重新显示播放按钮
+          btnPlay.visibility = View.VISIBLE
+        }
+        setOnErrorListener { _, what, extra ->
+          Log.e("VideoRecordActivity", "视频播放出错: $what/$extra")
+          Toast.makeText(this@VideoRecordActivity, "播放失败: $what/$extra", Toast.LENGTH_SHORT).show()
+          stopPlayback()
+          // 出错时也要重新显示播放按钮
+          btnPlay.visibility = View.VISIBLE
+          true
+        }
+        prepareAsync()
+        Log.d("VideoRecordActivity", "开始准备视频播放")
+      } catch (e: Exception) {
+        Log.e("VideoRecordActivity", "设置MediaPlayer失败", e)
+        Toast.makeText(this@VideoRecordActivity, "播放器设置失败: ${e.message}", Toast.LENGTH_SHORT).show()
         stopPlayback()
-        thumbnailView.visibility = View.VISIBLE
+        // 异常情况下也要重新显示播放按钮
+        btnPlay.visibility = View.VISIBLE
       }
-      setOnErrorListener { _, what, extra ->
-        Toast.makeText(this@VideoRecordActivity, "播放失败: $what/$extra", Toast.LENGTH_SHORT).show()
-        stopPlayback()
-        true
-      }
-      prepareAsync()
     }
   }
 
@@ -504,16 +649,104 @@ class VideoRecordActivity : AppCompatActivity() {
       release()
     }
     mediaPlayer = null
-    playbackSurface.visibility = View.GONE
+    // 不要隐藏playbackSurface，保持Surface可用以支持重复播放
+    // playbackSurface.visibility = View.GONE
+  }
+
+  /**
+   * 智能检测视频文件是否真正可用并启用播放按钮
+   * 替代硬编码的500ms延迟
+   */
+  private fun checkVideoFileAndEnablePlayback() {
+    // 启动一个后台线程来检测文件就绪状态
+    Thread {
+      val startTime = System.currentTimeMillis()
+      val maxWaitTime = 2000L // 最多等待2秒
+      val checkInterval = 50L // 每50ms检查一次
+
+      while (System.currentTimeMillis() - startTime < maxWaitTime) {
+        if (isVideoFileReady(videoPath)) {
+          // 文件就绪，立即启用播放按钮
+          val elapsedTime = System.currentTimeMillis() - startTime
+          runOnUiThread {
+            btnPlay.visibility = View.VISIBLE
+            // 拍摄完毕后不显示切换摄像头按钮
+            // btnFlip.visibility = View.VISIBLE
+            Log.d("VideoRecordActivity", "视频文件就绪，启用播放按钮，检测耗时: ${elapsedTime}ms")
+          }
+          return@Thread
+        }
+
+        // 短暂等待后再次检查
+        Thread.sleep(checkInterval)
+      }
+
+      // 超时处理：即使文件可能不完美，也启用播放按钮
+      runOnUiThread {
+        btnPlay.visibility = View.VISIBLE
+        // btnFlip.visibility = View.VISIBLE
+        Log.w("VideoRecordActivity", "视频文件检测超时，强制启用播放按钮")
+      }
+    }.start()
+  }
+
+  /**
+   * 检查视频文件是否真正准备好可以播放
+   * @param videoPath 视频文件路径
+   * @return true表示文件就绪，false表示还需要等待
+   */
+  private fun isVideoFileReady(videoPath: String): Boolean {
+    if (videoPath.isEmpty()) return false
+
+    val videoFile = File(videoPath)
+
+    // 1. 检查文件是否存在
+    if (!videoFile.exists()) {
+      Log.d("VideoFileReady", "文件不存在: $videoPath")
+      return false
+    }
+
+    // 2. 检查文件大小（至少要有几KB的数据）
+    val fileSize = videoFile.length()
+    if (fileSize < 4096) { // 小于4KB认为文件还不完整
+      Log.d("VideoFileReady", "文件太小: ${fileSize} bytes")
+      return false
+    }
+
+    // 3. 使用MediaMetadataRetriever进行实际检测
+    return try {
+      val retriever = MediaMetadataRetriever()
+      retriever.setDataSource(videoPath)
+
+      // 尝试获取基本信息
+      val duration = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
+      val width = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)
+      val height = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)
+
+      retriever.release()
+
+      val isReady = !duration.isNullOrEmpty() && duration != "0" &&
+                   !width.isNullOrEmpty() && !height.isNullOrEmpty()
+
+      Log.d("VideoFileReady", "检测结果: duration=$duration, size=${width}x${height}, ready=$isReady")
+      isReady
+    } catch (e: Exception) {
+      Log.d("VideoFileReady", "MediaMetadataRetriever检测失败: ${e.message}")
+      false
+    }
   }
 
   private fun finishWithResult() {
+    Log.d("VideoRecordActivity", "finishWithResult() 被调用，captureState=$captureState, videoPath='$videoPath', imagePath='$imagePath'")
+
     when (captureState) {
       CaptureState.IMAGE_REVIEW -> {
         if (imagePath.isEmpty()) {
+          Log.e("VideoRecordActivity", "图片路径为空，无法返回结果")
           Toast.makeText(this, R.string.photo_capture_failed, Toast.LENGTH_SHORT).show()
           return
         }
+        Log.d("VideoRecordActivity", "返回图片结果: $imagePath")
         setResult(Activity.RESULT_OK, Intent().apply {
           putExtra("path", imagePath)
           putExtra("imagePath", imagePath)
@@ -522,10 +755,22 @@ class VideoRecordActivity : AppCompatActivity() {
         finish()
       }
       CaptureState.VIDEO_REVIEW -> {
+        Log.d("VideoRecordActivity", "视频模式，检查videoPath: '$videoPath'")
         if (videoPath.isEmpty()) {
+          Log.e("VideoRecordActivity", "视频路径为空，无法返回结果")
           Toast.makeText(this, R.string.record_file_failed, Toast.LENGTH_SHORT).show()
           return
         }
+
+        // 额外检查：确保视频文件确实存在
+        val videoFile = File(videoPath)
+        if (!videoFile.exists()) {
+          Log.e("VideoRecordActivity", "视频文件不存在: $videoPath")
+          Toast.makeText(this, "视频文件不存在，请重新录制", Toast.LENGTH_SHORT).show()
+          return
+        }
+
+        Log.d("VideoRecordActivity", "返回视频结果: $videoPath (文件大小: ${videoFile.length()} bytes)")
         setResult(Activity.RESULT_OK, Intent().apply {
           putExtra("path", videoPath)
           putExtra("imagePath", imagePath)
@@ -533,7 +778,10 @@ class VideoRecordActivity : AppCompatActivity() {
         })
         finish()
       }
-      else -> Toast.makeText(this, R.string.record_nothing, Toast.LENGTH_SHORT).show()
+      else -> {
+        Log.w("VideoRecordActivity", "未知的captureState: $captureState，无法返回结果")
+        Toast.makeText(this, R.string.record_nothing, Toast.LENGTH_SHORT).show()
+      }
     }
   }
 
@@ -730,6 +978,7 @@ private class CodecRecorder(
   private var drainThread: Thread? = null
   private var drainLatch: CountDownLatch? = null
   private var inputSurface: Surface? = null
+  private var onRecordingComplete: (() -> Unit)? = null
 
   val isRecording: Boolean
     get() = drainThread != null
@@ -751,14 +1000,30 @@ private class CodecRecorder(
   }
 
   fun stopRecording() {
+    Log.d("CodecRecorder", "stopRecording()被调用，准备发送结束信号")
     try {
-      MediaCodec::class.java.getMethod("signalEndOfInputSurface").invoke(codec)
-    } catch (_: Exception) {
+      MediaCodec::class.java.getMethod("signalEndOfInputStream").invoke(codec)
+      Log.d("CodecRecorder", "signalEndOfInputStream调用成功")
+    } catch (e: Exception) {
+      Log.w("CodecRecorder", "signalEndOfInputStream调用失败，尝试设置drainLatch为null来结束循环", e)
+      // 如果signalEndOfInputStream不可用，设置drainLatch为null来结束循环
+      drainLatch = null
     }
     try {
-      drainLatch?.await(2, TimeUnit.SECONDS)
-    } catch (_: Exception) {
+      Log.d("CodecRecorder", "开始等待drainLatch，最多等待1秒")
+      // 优化：移除固定等待时间，改为监听真实完成事件
+      // drainLatch会在drainEncoderLoop()完成时自动调用countDown()
+      val completed = drainLatch?.await(1, TimeUnit.SECONDS) ?: false
+      Log.d("CodecRecorder", "drainLatch等待完成，completed=$completed")
+    } catch (e: Exception) {
+      Log.e("CodecRecorder", "等待drainLatch时发生异常", e)
     }
+  }
+
+  fun setOnRecordingComplete(callback: () -> Unit) {
+    Log.d("CodecRecorder", "设置编码器完成回调，当前线程: ${Thread.currentThread().name}")
+    onRecordingComplete = callback
+    Log.d("CodecRecorder", "编码器完成回调设置完成")
   }
 
   fun release() {
@@ -783,8 +1048,9 @@ private class CodecRecorder(
   }
 
   private fun drainEncoderLoop() {
+    Log.d("CodecRecorder", "drainEncoderLoop开始运行，线程: ${Thread.currentThread().name}")
     try {
-      while (true) {
+      while (drainLatch != null) {
         val index = codec.dequeueOutputBuffer(bufferInfo, 10_000)
         when {
           index == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
@@ -815,7 +1081,12 @@ private class CodecRecorder(
     } catch (e: Exception) {
       Log.e("CodecRecorder", "drain error", e)
     } finally {
+      Log.d("CodecRecorder", "drainEncoderLoop进入finally块，准备调用回调")
       drainLatch?.countDown()
+      Log.d("CodecRecorder", "drainLatch已countDown，准备调用onRecordingComplete回调")
+      // 关键优化：在真正完成时调用回调
+      onRecordingComplete?.invoke()
+      Log.d("CodecRecorder", "onRecordingComplete回调调用完成")
     }
   }
 }
