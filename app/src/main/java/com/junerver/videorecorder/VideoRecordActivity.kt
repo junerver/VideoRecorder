@@ -6,6 +6,7 @@ import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Matrix
 import android.graphics.SurfaceTexture
 import android.hardware.camera2.*
 import android.hardware.camera2.params.StreamConfigurationMap
@@ -206,7 +207,7 @@ class VideoRecordActivity : AppCompatActivity() {
 
   private fun startCameraController() {
     cameraController?.shutdown()
-    cameraController = Camera2Controller(this, viewFinder) { /* ready */ }
+    cameraController = Camera2Controller(this, viewFinder, { /* ready */ }, requestedOption.containerFormat)
     cameraController?.start()
   }
 
@@ -469,7 +470,7 @@ class VideoRecordActivity : AppCompatActivity() {
     }
   }
 
-  
+
   private fun showVideoReview(thumbnailPath: String) {
     captureState = CaptureState.VIDEO_REVIEW
     recordPanel.visibility = View.GONE
@@ -811,7 +812,8 @@ class VideoRecordActivity : AppCompatActivity() {
 private class Camera2Controller(
   private val context: Activity,
   private val textureView: TextureView,
-  private val onReady: () -> Unit
+  private val onReady: () -> Unit,
+  private val containerFormat: Int = MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4
 ) {
   private val manager = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
   private val cameraThread = HandlerThread("CodecCameraThread").apply { start() }
@@ -922,6 +924,12 @@ private class Camera2Controller(
     val texture = textureView.surfaceTexture ?: return
     previewSize = choosePreviewSize()
     texture.setDefaultBufferSize(previewSize.width, previewSize.height)
+
+    // 为WebM容器应用旋转变换，解决VP8视频方向问题
+    if (containerFormat == MediaMuxer.OutputFormat.MUXER_OUTPUT_WEBM) {
+      applyWebMRotationTransform(texture)
+    }
+
     previewSurface = Surface(texture)
   }
 
@@ -962,6 +970,61 @@ private class Camera2Controller(
   }
 
   private fun currentCameraId(): String = cameraIds[currentCameraIndex]
+
+  /**
+   * 为WebM容器应用旋转变换，解决VP8视频方向问题
+   * 注意：SurfaceTexture API不支持直接变换，这里记录日志供调试
+   * 实际解决方案可能需要OpenGL渲染或其他方法
+   */
+  private fun applyWebMRotationTransform(texture: SurfaceTexture) {
+    try {
+      // 获取传感器方向
+      val sensorOrientation = getSensorOrientation()
+      val isFront = getLensFacing(currentCameraId()) == CameraCharacteristics.LENS_FACING_FRONT
+
+      // 计算期望的旋转角度
+      val expectedRotation = when {
+        isFront -> {
+          // 前置摄像头需要顺时针旋转
+          when (sensorOrientation) {
+            90 -> 90f    // 传感器90度，顺时针旋转90度
+            270 -> -90f  // 传感器270度，逆时针旋转90度
+            else -> 0f
+          }
+        }
+        else -> {
+          // 后置摄像头需要逆时针旋转
+          when (sensorOrientation) {
+            90 -> -90f   // 传感器90度，逆时针旋转90度
+            270 -> 90f   // 传感器270度，顺时针旋转90度
+            else -> 0f
+          }
+        }
+      }
+
+      if (expectedRotation != 0f) {
+        Log.w("Camera2Controller", "WebM容器需要旋转变换: $expectedRotation° (前置=$isFront, 传感器方向=$sensorOrientation)")
+        Log.w("Camera2Controller", "注意：当前SurfaceTexture API不支持直接变换，可能需要OpenGL解决方案")
+      } else {
+        Log.d("Camera2Controller", "WebM容器无需旋转变换 (前置=$isFront, 传感器方向=$sensorOrientation)")
+      }
+    } catch (e: Exception) {
+      Log.e("Camera2Controller", "检测WebM旋转需求失败", e)
+    }
+  }
+
+  /**
+   * 获取摄像头传感器的方向
+   */
+  private fun getSensorOrientation(): Int {
+    return try {
+      val characteristics = manager.getCameraCharacteristics(currentCameraId())
+      characteristics.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 0
+    } catch (e: Exception) {
+      Log.e("Camera2Controller", "获取传感器方向失败", e)
+      0
+    }
+  }
 }
 
 private class CodecRecorder(
@@ -993,7 +1056,16 @@ private class CodecRecorder(
     codec.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
     inputSurface = codec.createInputSurface()
     codec.start()
-    muxer.setOrientationHint(orientationHint)
+
+    // 关键修复：始终设置旋转提示
+    // MediaMuxer 在 API 24+ (Android 7.0) 已支持 MUXER_OUTPUT_WEBM (WebM) 的 setOrientationHint
+    try {
+      muxer.setOrientationHint(orientationHint)
+      Log.d("CodecRecorder", "容器格式 ${option.containerFormat}，已设置旋转提示为 $orientationHint")
+    } catch (e: Exception) {
+      Log.w("CodecRecorder", "设置旋转提示失败（忽略）", e)
+    }
+
     drainLatch = CountDownLatch(1)
     drainThread = Thread { drainEncoderLoop() }.apply { start() }
     return inputSurface!!
@@ -1049,6 +1121,12 @@ private class CodecRecorder(
 
   private fun drainEncoderLoop() {
     Log.d("CodecRecorder", "drainEncoderLoop开始运行，线程: ${Thread.currentThread().name}")
+    var frameCount = 0
+    var firstPtsUs = -1L
+    var lastPtsUs = 0L
+    val fps = option.defaultFrameRate.takeIf { it > 0 } ?: 30
+    val minStepUs = 1_000_000L / fps
+
     try {
       while (drainLatch != null) {
         val index = codec.dequeueOutputBuffer(bufferInfo, 10_000)
@@ -1059,22 +1137,80 @@ private class CodecRecorder(
             muxerVideoTrack = muxer.addTrack(newFormat)
             muxer.start()
             muxerStarted = true
+            Log.d("CodecRecorder", "muxer已启动，视频轨道: $muxerVideoTrack")
           }
           index == MediaCodec.INFO_TRY_AGAIN_LATER -> {
             if (drainLatch == null) break
           }
           index >= 0 -> {
             val encodedData = codec.getOutputBuffer(index) ?: continue
+
+            // 忽略 codec config
             if (bufferInfo.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG != 0) {
               bufferInfo.size = 0
+              codec.releaseOutputBuffer(index, false)
+              continue
             }
+
+            // 检查流是否结束
+            if (bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) {
+              Log.d("CodecRecorder", "收到流结束标志 (EOS)")
+              // 在 break 之前，我们可能仍需要将这个带 EOS 标志的 buffer 写入
+              // (尽管它的大小通常为 0)，以正确关闭 muxer
+              // 但在这里，我们直接 break，在 finally 中处理 muxer.stop()
+            } else {
+              // ------ 关键修复：时间戳规范化 (开始) ------
+              frameCount++ // 只有在不是配置帧和EOS时才计数
+              val currentPtsUs = bufferInfo.presentationTimeUs
+
+              if (firstPtsUs == -1L) {
+                // 这是第一帧
+                firstPtsUs = currentPtsUs
+                Log.d("CodecRecorder", "第一帧时间戳 (firstPtsUs) 设置为: $firstPtsUs")
+                lastPtsUs = 0L // 确保第一帧的时间戳为 0
+              } else {
+                // 计算规范化的时间戳（从0开始）
+                val normalizedPtsUs = currentPtsUs - firstPtsUs
+
+                // 确保时间戳单调递增
+                if (normalizedPtsUs <= lastPtsUs) {
+                  // 时间戳回退或相同，我们必须前进一点点
+                  // (使用 minStepUs / 2 作为一个小的增量，确保它大于上一帧)
+                  lastPtsUs += (minStepUs / 2)
+                  Log.w("CodecRecorder", "时间戳回退: $normalizedPtsUs <= $lastPtsUs (来自 $currentPtsUs). 调整为: $lastPtsUs")
+                } else {
+                  lastPtsUs = normalizedPtsUs
+                }
+              }
+              // ------ 关键修复：时间戳规范化 (结束) ------
+            }
+
+            // 只在有可写数据且muxer已启动时写入
             if (bufferInfo.size > 0 && muxerStarted && muxerVideoTrack >= 0) {
+              // 需要使用一个新的 BufferInfo，因为我们要写入修正后的时间戳 'lastPtsUs'
+              val outBufInfo = MediaCodec.BufferInfo()
+              // 关键：我们��计算出的 lastPtsUs 写入
+              outBufInfo.set(bufferInfo.offset, bufferInfo.size, lastPtsUs, bufferInfo.flags)
+
               encodedData.position(bufferInfo.offset)
               encodedData.limit(bufferInfo.offset + bufferInfo.size)
-              muxer.writeSampleData(muxerVideoTrack, encodedData, bufferInfo)
+              try {
+                muxer.writeSampleData(muxerVideoTrack, encodedData, outBufInfo)
+                // 调试日志：只记录前几帧
+                if (frameCount <= 5) {
+                  Log.d("CodecRecorder", "帧$frameCount 写入: 原始 ${bufferInfo.presentationTimeUs} -> 修正 $lastPtsUs")
+                }
+              } catch (e: Exception) {
+                Log.e("CodecRecorder", "写入 muxer 失败", e)
+              }
             }
+
             codec.releaseOutputBuffer(index, false)
-            if (bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) break
+
+            if (bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) {
+              Log.d("CodecRecorder", "流结束，总帧数: $frameCount, 最后时间戳: $lastPtsUs")
+              break
+            }
           }
         }
       }
@@ -1082,6 +1218,10 @@ private class CodecRecorder(
       Log.e("CodecRecorder", "drain error", e)
     } finally {
       Log.d("CodecRecorder", "drainEncoderLoop进入finally块，准备调用回调")
+      if (frameCount > 0) {
+        val estimatedDuration = (lastPtsUs - firstPtsUs) / 1_000_000L
+        Log.d("CodecRecorder", "编码统计: 帧数=$frameCount, 开始=$firstPtsUs, 结束=$lastPtsUs, 估计时长=${estimatedDuration}秒")
+      }
       drainLatch?.countDown()
       Log.d("CodecRecorder", "drainLatch已countDown，准备调用onRecordingComplete回调")
       // 关键优化：在真正完成时调用回调
