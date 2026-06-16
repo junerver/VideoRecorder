@@ -12,6 +12,7 @@ Android 仿微信短视频录制
 ## Bug 修复与更新日志：
 
 ### 更新日志：
+- 2.2.0：精简依赖（移除RxJava/RxPermissions/MaterialProgressBar），迁移至Activity Result API，修复轻触拍照误触发录制 ——25.06.16
 - 2.1.0：增加编码器自选功能（H264/H265/VP8），通过OpenGL实现VP8/WebM格式物理旋转和前置摄像头镜像修复 ——25.11.07
 - 2.0.0：完成CameraX迁移，修复视频播放、缩略图生成、Surface预热等问题 ——25.11.06
 - 1.2.2：兼容性和稳定性优化 ——23.05.31
