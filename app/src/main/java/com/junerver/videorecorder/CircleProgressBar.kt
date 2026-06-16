@@ -7,6 +7,7 @@ import android.graphics.Paint
 import android.graphics.RectF
 import android.util.AttributeSet
 import android.view.View
+import androidx.core.graphics.toColorInt
 
 /**
  * 自定义圆形进度条组件，用于录制时的进度指示
@@ -19,7 +20,7 @@ class CircleProgressBar @JvmOverloads constructor(
 ) : View(context, attrs, defStyleAttr) {
 
     private val backgroundPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.parseColor("#80FFFFFF")
+        color = "#80FFFFFF".toColorInt()
         style = Paint.Style.STROKE
         strokeWidth = 8f
     }

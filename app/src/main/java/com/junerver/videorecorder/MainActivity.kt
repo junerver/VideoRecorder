@@ -1,7 +1,6 @@
 package com.junerver.videorecorder
 
 import android.Manifest
-import android.app.Activity
 import android.content.Intent
 import android.media.MediaCodecList
 import android.os.Build
@@ -12,14 +11,14 @@ import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
-import com.junerver.videorecorder.VideoRecordActivity.Companion.TYPE_IMAGE
 
 class MainActivity : AppCompatActivity() {
-    val REQUEST_VIDEO = 99
 
     private lateinit var mBtnRecord: Button
     private lateinit var mTvResult: TextView
     private lateinit var mTvCodecSupport: TextView
+
+    private var currentOption: VideoEncoderOption = VideoEncoderOption.H264
 
     // 权限请求启动器
     private val requestPermissionsLauncher = registerForActivityResult(
@@ -46,7 +45,22 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private var currentOption: VideoEncoderOption = VideoEncoderOption.H264
+    // 拍摄结果启动器
+    private val recordResultLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == RESULT_OK) {
+            val data = result.data
+            val path = data?.getStringExtra("path")
+            val imgPath = data?.getStringExtra("imagePath")
+            val type = data?.getIntExtra("type", -1)
+            if (type == VideoRecordActivity.TYPE_VIDEO) {
+                mTvResult.text = "视频地址：\n$path \n缩略图地址：\n$imgPath"
+            } else if (type == VideoRecordActivity.TYPE_IMAGE) {
+                mTvResult.text = "图片地址：\n$imgPath"
+            }
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -61,22 +75,6 @@ class MainActivity : AppCompatActivity() {
         }
 
         showCodecSupport()
-    }
-
-    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
-        super.onActivityResult(requestCode, resultCode, data)
-        if (resultCode == Activity.RESULT_OK) {
-            if (requestCode == REQUEST_VIDEO) {
-                val path = data?.getStringExtra("path")
-                val imgPath = data?.getStringExtra("imagePath")
-                val type = data?.getIntExtra("type", -1)
-                if (type == VideoRecordActivity.TYPE_VIDEO) {
-                    mTvResult.text = "视频地址：\n$path \n缩略图地址：\n$imgPath"
-                } else if (type == VideoRecordActivity.TYPE_IMAGE) {
-                    mTvResult.text = "图片地址：\n$imgPath"
-                }
-            }
-        }
     }
 
     private fun showEncoderPicker() {
@@ -110,7 +108,7 @@ class MainActivity : AppCompatActivity() {
         val intent = Intent(this@MainActivity, VideoRecordActivity::class.java).apply {
             putExtra(VideoRecordActivity.EXTRA_ENCODER_OPTION, option.extraValue)
         }
-        startActivityForResult(intent, REQUEST_VIDEO)
+        recordResultLauncher.launch(intent)
     }
 
     private fun showCodecSupport() {

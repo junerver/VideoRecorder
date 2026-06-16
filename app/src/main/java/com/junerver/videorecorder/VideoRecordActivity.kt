@@ -1,6 +1,7 @@
 package com.junerver.videorecorder
 
 import android.Manifest
+import android.annotation.SuppressLint
 import android.app.Activity
 import android.content.Context
 import android.content.Intent
@@ -158,6 +159,7 @@ class VideoRecordActivity : AppCompatActivity() {
     }
   }
 
+  @SuppressLint("ClickableViewAccessibility")
   private fun initViews() {
     viewFinder = findViewById(R.id.view_finder)
     playbackSurface = findViewById(R.id.mSurfaceview)
@@ -193,7 +195,7 @@ class VideoRecordActivity : AppCompatActivity() {
       }
     })
 
-    btnRecord.setOnTouchListener { _, event ->
+    btnRecord.setOnTouchListener { v, event ->
       when (event.action) {
         MotionEvent.ACTION_DOWN -> {
           touchStartTime = System.currentTimeMillis()
@@ -201,16 +203,22 @@ class VideoRecordActivity : AppCompatActivity() {
           true
         }
 
-        MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+        MotionEvent.ACTION_UP -> {
           uiHandler.removeCallbacks(longPressRunnable)
           if (codecRecorder?.isRecording == true) {
             stopVideoRecording()
           } else {
             val tapDuration = System.currentTimeMillis() - touchStartTime
             if (tapDuration < LONG_PRESS_THRESHOLD_MS) {
+              v.performClick()
               capturePhotoFromPreview()
             }
           }
+          true
+        }
+
+        MotionEvent.ACTION_CANCEL -> {
+          uiHandler.removeCallbacks(longPressRunnable)
           true
         }
 
@@ -634,9 +642,9 @@ class VideoRecordActivity : AppCompatActivity() {
 
     // 检查文件大小，如果太小可能还在写入
     val fileSize = videoFile.length()
-    Log.d("VideoRecordActivity", "视频文件大小: ${fileSize} bytes")
+    Log.d("VideoRecordActivity", "视频文件大小: $fileSize bytes")
     if (fileSize < 1024) { // 小于1KB可能文件不完整
-      Log.w("VideoRecordActivity", "视频文件太小，可能还在写入中: ${fileSize} bytes")
+      Log.w("VideoRecordActivity", "视频文件太小，可能还在写入中: $fileSize bytes")
       Toast.makeText(this, "视频正在处理中，请稍后再试", Toast.LENGTH_SHORT).show()
       // 延迟500ms后重试
       uiHandler.postDelayed({
@@ -777,7 +785,7 @@ class VideoRecordActivity : AppCompatActivity() {
     // 2. 检查文件大小（至少要有几KB的数据）
     val fileSize = videoFile.length()
     if (fileSize < 4096) { // 小于4KB认为文件还不完整
-      Log.d("VideoFileReady", "文件太小: ${fileSize} bytes")
+      Log.d("VideoFileReady", "文件太小: $fileSize bytes")
       return false
     }
 
@@ -882,7 +890,7 @@ class VideoRecordActivity : AppCompatActivity() {
     const val TYPE_VIDEO = 0
     const val TYPE_IMAGE = 1
     private const val MAX_DURATION_MS = 10_000L
-    private const val LONG_PRESS_THRESHOLD_MS = 100L
+    private const val LONG_PRESS_THRESHOLD_MS = 300L
     private const val PROGRESS_INTERVAL_MS = 100L
   }
 }
