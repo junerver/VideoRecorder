@@ -96,13 +96,11 @@
             android:background="@drawable/btn_video_record" />
     </LinearLayout>
 
-    <me.zhanghai.android.materialprogressbar.MaterialProgressBar
+    <com.junerver.videorecorder.CircleProgressBar
         android:id="@+id/mProgress"
-        style="@style/Widget.MaterialProgressBar.ProgressBar.Small.NoPadding"
         android:layout_width="92dp"
         android:layout_height="92dp"
         android:layout_marginBottom="74dp"
-        android:indeterminate="false"
         android:visibility="invisible"
         app:layout_constraintBottom_toBottomOf="parent"
         app:layout_constraintEnd_toEndOf="parent"

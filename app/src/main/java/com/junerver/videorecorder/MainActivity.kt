@@ -9,6 +9,7 @@ import android.os.Bundle
 import android.widget.Button
 import android.widget.TextView
 import android.widget.Toast
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import com.junerver.videorecorder.VideoRecordActivity.Companion.TYPE_IMAGE
@@ -19,6 +20,33 @@ class MainActivity : AppCompatActivity() {
     private lateinit var mBtnRecord: Button
     private lateinit var mTvResult: TextView
     private lateinit var mTvCodecSupport: TextView
+
+    // 权限请求启动器
+    private val requestPermissionsLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { permissions ->
+        val allGranted = permissions.entries.all { it.value }
+        if (allGranted) {
+            startRecorder(currentOption)
+        } else {
+            val describe = getString(R.string.encoder_permission_rationale, currentOption.label)
+            val dialog = AlertDialog.Builder(this)
+                .setTitle("权限申请")
+                .setMessage("${describe}为必选项，开通后方可正常使用APP,请在设置中开启。")
+                .setCancelable(false)
+                .setPositiveButton("去开启") { _, _ ->
+                    finish()
+                }
+                .setNegativeButton("结束") { _, _ ->
+                    Toast.makeText(this, "${describe}权限未开启，不能使用该功能！", Toast.LENGTH_SHORT).show()
+                    finish()
+                }
+                .create()
+            dialog.show()
+        }
+    }
+
+    private var currentOption: VideoEncoderOption = VideoEncoderOption.H264
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -68,15 +96,14 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun requestPermissionsAndLaunch(option: VideoEncoderOption) {
-        val describe = getString(R.string.encoder_permission_rationale, option.label)
-        rxRequestPermissions(
-            Manifest.permission.CAMERA,
-            Manifest.permission.WRITE_EXTERNAL_STORAGE,
-            Manifest.permission.RECORD_AUDIO,
-            describe = describe
-        ) {
-            startRecorder(option)
-        }
+        currentOption = option
+        requestPermissionsLauncher.launch(
+            arrayOf(
+                Manifest.permission.CAMERA,
+                Manifest.permission.WRITE_EXTERNAL_STORAGE,
+                Manifest.permission.RECORD_AUDIO
+            )
+        )
     }
 
     private fun startRecorder(option: VideoEncoderOption) {
